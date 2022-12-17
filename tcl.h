@@ -5,17 +5,17 @@
 
 struct tcl_env;
 struct tcl_cmd;
-typedef char tcl_value_t;
+struct tcl_value;
 struct tcl {
   struct tcl_env *env;
   struct tcl_cmd *cmds;
-  tcl_value_t *result;
+  struct tcl_value *result;
 };
 
 
-/* -------------------------------------------------------------------------
+/* =========================================================================
     High level interface
-   ------------------------------------------------------------------------- */
+   ========================================================================= */
 
 /** tcl_init() initializes the interpreter context.
  *  \param tcl      The interpreter context.
@@ -41,9 +41,9 @@ void tcl_destroy(struct tcl *tcl);
 int tcl_eval(struct tcl *tcl, const char *script, size_t length);
 
 
-/* -------------------------------------------------------------------------
+/* =========================================================================
     Values
-   ------------------------------------------------------------------------- */
+   ========================================================================= */
 
 /** tcl_string() returns a pointer to the start of the contents of a value
  *  (where the value is assumed to be a string).
@@ -51,27 +51,27 @@ int tcl_eval(struct tcl *tcl, const char *script, size_t length);
  *
  *  \return A pointer to the buffer.
  */
-const char *tcl_string(tcl_value_t *v);
+const char *tcl_string(struct tcl_value *v);
 
 /** tcl_int() returns the value of a variable after parsing it as an integer
- *  value.
+ *  value. The function supports decimal, octal and dexadecimal notation.
  *  \param v        The value.
  *
  *  \return The numeric value of the parameter, or 0 on error.
  */
-int tcl_int(tcl_value_t *v);
+long tcl_int(struct tcl_value *v);
 
 /** tcl_length() returns the length of the contents of the value in bytes.
  *  \param v        The value.
  *
  *  \return The number of bytes in the buffer of the value.
  */
-int tcl_length(tcl_value_t *v);
+int tcl_length(struct tcl_value *v);
 
 
-/* -------------------------------------------------------------------------
+/* =========================================================================
     Low level interface
-   ------------------------------------------------------------------------- */
+   ========================================================================= */
 
 /** tcl_next() gets the next token from the stream (lexical analysis).
  *  \param script   The buffer with the script.
