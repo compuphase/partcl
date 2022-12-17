@@ -1,3 +1,26 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) 2016 Serge Zaitsev
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +36,7 @@
 #define MAX_VAR_LENGTH 256
 
 /* Token type and control flow constants */
-enum { TCMD, TWORD, TPART, TERROR };
+enum { TERROR, TCMD, TWORD, TPART };
 enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN };
 
 static int tcl_is_special(char c, int q) {
@@ -28,73 +51,72 @@ static int tcl_is_end(char c) {
   return (c == '\n' || c == '\r' || c == ';' || c == '\0');
 }
 
-int tcl_next(const char *s, size_t n, const char **from, const char **to,
-             int *q) {
+int tcl_next(const char *script, size_t length, const char **from, const char **to, bool *quote) {
   unsigned int i = 0;
   int depth = 0;
   char open;
   char close;
 
-  DBG("tcl_next(%.*s)+%d+%d|%d\n", n, s, *from - s, *to - s, *q);
+  DBG("tcl_next(%.*s)+%d+%d|%d\n", length, script, *from - script, *to - script, *quote);
 
   /* Skip leading spaces if not quoted */
-  for (; !*q && n > 0 && tcl_is_space(*s); s++, n--) {
-  }
-  *from = s;
+  for (; !*quote && length > 0 && tcl_is_space(*script); script++, length--)
+    {}
+  *from = script;
   /* Terminate command if not quoted */
-  if (!*q && n > 0 && tcl_is_end(*s)) {
-    *to = s + 1;
+  if (!*quote && length > 0 && tcl_is_end(*script)) {
+    *to = script + 1;
     return TCMD;
   }
-  if (*s == '$') { /* Variable token, must not start with a space or quote */
-    if (tcl_is_space(s[1]) || s[1] == '"') {
+  if (*script == '$') { /* Variable token, must not start with a space or quote */
+    if (tcl_is_space(script[1]) || script[1] == '"') {
       return TERROR;
     }
-    int mode = *q;
-    *q = 0;
-    int r = tcl_next(s + 1, n - 1, to, to, q);
-    *q = mode;
-    return ((r == TWORD && *q) ? TPART : r);
+    int mode = *quote;
+    *quote = 0;
+    int r = tcl_next(script + 1, length - 1, to, to, quote);
+    *quote = mode;
+    return ((r == TWORD && *quote) ? TPART : r);
   }
 
-  if (*s == '[' || (!*q && *s == '{')) {
+  if (*script == '[' || (!*quote && *script == '{')) {
     /* Interleaving pairs are not welcome, but it simplifies the code */
-    open = *s;
+    open = *script;
     close = (open == '[' ? ']' : '}');
-    for (i = 0, depth = 1; i < n && depth != 0; i++) {
-      if (i > 0 && s[i] == open) {
+    for (i = 0, depth = 1; i < length && depth != 0; i++) {
+      if (i > 0 && script[i] == open) {
         depth++;
-      } else if (s[i] == close) {
+      } else if (script[i] == close) {
         depth--;
       }
     }
-  } else if (*s == '"') {
-    *q = !*q;
-    *from = *to = s + 1;
-    if (*q) {
+  } else if (*script == '"') {
+    *quote = !*quote;
+    *from = *to = script + 1;
+    if (*quote) {
       return TPART;
     }
-    if (n < 2 || (!tcl_is_space(s[1]) && !tcl_is_end(s[1]))) {
+    if (length < 2 || (!tcl_is_space(script[1]) && !tcl_is_end(script[1]))) {
       return TERROR;
     }
-    *from = *to = s + 1;
+    *from = *to = script + 1;
     return TWORD;
-  } else if (*s == ']' || *s == '}') {
+  } else if (*script == ']' || *script == '}') {
     /* Unbalanced bracket or brace */
     return TERROR;
   } else {
-    while (i < n && (*q || !tcl_is_space(s[i])) && !tcl_is_special(s[i], *q)) {
+    while (i < length && (*quote || !tcl_is_space(script[i])) && !tcl_is_special(script[i], *quote)) {
       i++;
     }
   }
-  *to = s + i;
-  if (i == n) {
+  *to = script + i;
+  if (i == length && depth) {
     return TERROR;
   }
-  if (*q) {
+  if (*quote) {
     return TPART;
   }
-  return (tcl_is_space(s[i]) || tcl_is_end(s[i])) ? TWORD : TPART;
+  return (tcl_is_space(script[i]) || tcl_is_end(script[i])) ? TWORD : TPART;
 }
 
 /* A helper parser struct and macro (requires C99) */
@@ -103,7 +125,7 @@ struct tcl_parser {
   const char *to;
   const char *start;
   const char *end;
-  int q;
+  bool quote;
   int token;
 };
 static struct tcl_parser init_tcl_parser(const char *start, const char *end, int token) {
@@ -118,7 +140,7 @@ static struct tcl_parser init_tcl_parser(const char *start, const char *end, int
   for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR);        \
        p.start < p.end &&                                                      \
        (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,         \
-                             &p.q)) != TERROR) ||                              \
+                             &p.quote)) != TERROR) ||                          \
         (skiperr));                                                            \
        p.start = p.to)
 
@@ -325,6 +347,22 @@ int tcl_subst(struct tcl *tcl, const char *s, size_t len) {
   }
 }
 
+static int tcl_exec_cmd(struct tcl *tcl, tcl_value_t *list) {
+  tcl_value_t *cmdname = tcl_list_at(list, 0);
+  struct tcl_cmd *cmd = NULL;
+  int r = FERROR;
+  for (cmd = tcl->cmds; cmd != NULL; cmd = cmd->next) {
+    if (strcmp(tcl_string(cmdname), tcl_string(cmd->name)) == 0) {
+      if (cmd->arity == 0 || cmd->arity == tcl_list_length(list)) {
+        r = cmd->fn(tcl, list, cmd->arg);
+        break;
+      }
+    }
+  }
+  tcl_free(cmdname);
+  return r;
+}
+
 int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
   DBG("eval(%.*s)->\n", (int)len, s);
   tcl_value_t *list = tcl_list_alloc();
@@ -359,19 +397,8 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
       if (tcl_list_length(list) == 0) {
         tcl_result(tcl, FNORMAL, tcl_alloc("", 0));
       } else {
-        tcl_value_t *cmdname = tcl_list_at(list, 0);
-        struct tcl_cmd *cmd = NULL;
-        int r = FERROR;
-        for (cmd = tcl->cmds; cmd != NULL; cmd = cmd->next) {
-          if (strcmp(tcl_string(cmdname), tcl_string(cmd->name)) == 0) {
-            if (cmd->arity == 0 || cmd->arity == tcl_list_length(list)) {
-              r = cmd->fn(tcl, list, cmd->arg);
-              break;
-            }
-          }
-        }
-        tcl_free(cmdname);
-        if (cmd == NULL || r != FNORMAL) {
+        int r = tcl_exec_cmd(tcl, list);
+        if (r != FNORMAL) {
           tcl_list_free(list);
           return r;
         }
@@ -381,8 +408,14 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
       break;
     }
   }
+  /* when arrived at the end of the buffer, if the list is non-empty, run that
+     last command */
+  int r = FNORMAL;
+  if (tcl_list_length(list) > 0) {
+    r = tcl_exec_cmd(tcl, list);
+  }
   tcl_list_free(list);
-  return FNORMAL;
+  return r;
 }
 
 /* --------------------------------- */

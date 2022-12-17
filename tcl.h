@@ -1,6 +1,8 @@
 #ifndef _TCL_H
 #define _TCL_H
 
+#include <stdbool.h>
+
 struct tcl_env;
 struct tcl_cmd;
 typedef char tcl_value_t;
@@ -65,5 +67,22 @@ int tcl_int(tcl_value_t *v);
  *  \return The number of bytes in the buffer of the value.
  */
 int tcl_length(tcl_value_t *v);
+
+
+/* -------------------------------------------------------------------------
+    Low level interface
+   ------------------------------------------------------------------------- */
+
+/** tcl_next() gets the next token from the stream (lexical analysis).
+ *  \param script   The buffer with the script.
+ *  \param length   The size of the "script" buffer.
+ *  \param from     [out] Is set to the start of the token, on return.
+ *  \param to       [out] Is set to just behind the end of the token, on return.
+ *  \param quote    [out] Is set to true when inside a quoted string, or false if
+ *                  otherwise.
+ *
+ *  \return The token type (0 = parsing error).
+ */
+int tcl_next(const char *script, size_t length, const char **from, const char **to, bool *quote);
 
 #endif /* _TCL_H */
