@@ -1,5 +1,4 @@
 #include <stdlib.h>
-
 #include <stdio.h>
 #include <string.h>
 
@@ -108,8 +107,16 @@ struct tcl_parser {
   int q;
   int token;
 };
+static struct tcl_parser init_tcl_parser(const char *start, const char *end, int token) {
+  struct tcl_parser p;
+  memset(&p, 0, sizeof(p));
+  p.start = start;
+  p.end = end;
+  p.token = token;
+  return p;
+}
 #define tcl_each(s, len, skiperr)                                              \
-  for (struct tcl_parser p = {NULL, NULL, (s), (s) + (len), 0, TERROR};        \
+  for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR);        \
        p.start < p.end &&                                                      \
        (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,         \
                              &p.q)) != TERROR) ||                              \
@@ -627,7 +634,7 @@ void tcl_destroy(struct tcl *tcl) {
   tcl_free(tcl->result);
 }
 
-#ifndef TEST
+#ifdef TEST
 #define CHUNK 1024
 
 int main() {
