@@ -1,4 +1,4 @@
-# Partcl - a minimal Tcl interpreter
+# ParTcl - a minimal Tcl interpreter
 
 [![Build Status](https://img.shields.io/github/workflow/status/zserge/partcl/Build%20Pipeline)](https://github.com/zserge/partcl)
 
@@ -38,7 +38,7 @@ tcl_destroy(&tcl);
 ## Language syntax
 
 Tcl script is made up of _commands_ separated by semicolons or newline
-symbols. Commnads in their turn are made up of _words_ separated by whitespace.
+symbols. Commands in their turn are made up of _words_ separated by whitespace.
 To make whitespace a part of the word one may use double quotes or braces.
 
 An important part of the language is _command substitution_, when the result of
@@ -54,10 +54,10 @@ enhance the language.
 Any symbol can be part of the word, except for the following special symbols:
 
 * whitespace, tab - used to delimit words
-* `\r`, `\n`, semicolon or EOF - used to delimit commands
+* `\r`, `\n`, semicolon or EOF (zero-terminator) - used to delimit commands
 * Braces, square brackets, dollar sign - used for substitution and grouping
 
-Partcl has special helper functions for these char classes:
+ParTcl has special helper functions for these char classes:
 
 ```
 static int tcl_is_space(char c);
@@ -69,7 +69,7 @@ static int tcl_is_special(char c, int q);
 parameter). Inside a quoted string braces, semicolon and end-of-line symbols
 lose their special meaning and become regular printable characters.
 
-Partcl lexer is implemented in one function:
+ParTcl lexer is implemented in one function:
 
 ```
 int tcl_next(const char *s, size_t n, const char **from, const char **to, int *q);
@@ -119,7 +119,7 @@ Also, the string returned by `tcl_string()` it not meant to be mutated or
 cached.
 
 In the default implementation lists are implemented as raw strings that add
-some escaping (braces) around each iterm. It's a simple solution that also
+some escaping (braces) around each item. It's a simple solution that also
 reduces the code, but in some exotic cases the escaping can become wrong and
 invalid results will be returned.
 
@@ -144,7 +144,7 @@ values (name + value) and a pointer to the next variable.
 
 ## Interpreter
 
-Partcl interpreter is a simple structure `struct tcl` which keeps the current
+ParTcl interpreter is a simple structure `struct tcl` which keeps the current
 environment, array of available commands and a last result value.
 
 Interpreter logic is wrapped around two functions - evaluation and
@@ -165,14 +165,14 @@ Evaluation:
 
 - Iterates over each token in a list
 - Appends words into a list
-- If the command end is met (semicolor, or newline, or end-of-file - our lexer
+- If the command end is met (semicolon, or newline, or end-of-file - our lexer
   has a special token type `TCMD` for them) - then find a suitable command (the
   first word in the list) and call it.
 
-Where the commands are taken from? Initially, a Partcl interpeter starts with
+Where the commands are taken from? Initially, a ParTcl interpeter starts with
 no commands, but one may add the commands by calling `tcl_register()`.
 
-Each command has a name, arity (how many arguments is shall take - interpreter
+Each command has a name, arity (how many arguments it shall take - interpreter
 checks it before calling the command, use zero arity for varargs) and a C
 function pointer that actually implements the command.
 
@@ -196,7 +196,7 @@ current interpreter commands. That's how user-defined commands are built.
 "break", "continue" or "return" inside the loop to contol the flow.
 
 Various math operations are implemented as `tcl_cmd_math`, but can be disabled,
-too if your script doesn't need them (if you want to use Partcl as a command
+too if your script doesn't need them (if you want to use ParTcl as a command
 shell, not as a programming language).
 
 ## Building and testing
