@@ -1,6 +1,8 @@
-#include <stdlib.h>
+#include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include "tcl.h"
 
 #if 0
 #define DBG printf
@@ -9,9 +11,6 @@
 #endif
 
 #define MAX_VAR_LENGTH 256
-
-struct tcl;
-int tcl_eval(struct tcl *tcl, const char *s, size_t len);
 
 /* Token type and control flow constants */
 enum { TCMD, TWORD, TPART, TERROR };
@@ -268,12 +267,6 @@ static struct tcl_env *tcl_env_free(struct tcl_env *env) {
   free(env);
   return parent;
 }
-
-struct tcl {
-  struct tcl_env *env;
-  struct tcl_cmd *cmds;
-  tcl_value_t *result;
-};
 
 tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *v) {
   DBG("var(%s := %.*s)\n", tcl_string(name), tcl_length(v), tcl_string(v));
