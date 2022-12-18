@@ -1,32 +1,32 @@
 # ParTcl - a minimal Tcl interpreter
 
-[![Build Status](https://img.shields.io/github/workflow/status/zserge/partcl/Build%20Pipeline)](https://github.com/zserge/partcl)
+Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
 
 ## Features
 
-* ~600 lines of "pedantic" C99 code
+* Small, plain C99 code (although now twice as long as the ~600 lines of the original)
 * No external dependencies
 * Good test coverage
 * Can be extended with custom Tcl commands
-* Runs well on bare metal embedded MCUs (~10k of flash is required)
+* Runs well on bare metal embedded MCUs
 
 Built-in commands:
 
 * `subst arg`
 * `set var ?val?`
+* `expr`
 * `while cond loop`
 * `if cond branch ?cond? ?branch? ?other?`
 * `proc name args body`
 * `return`
 * `break`
 * `continue`
-* arithmetic operations: `+, -, *, /, <, >, <=, >=, ==, !=`
 
 ## Usage
 
 ```c
 struct tcl tcl;
-const char *s = "set x 4; puts [+ [* $x 10] 2]";
+const char *s = "set x 4; puts [expr 2 + $x * 10]";
 
 tcl_init(&tcl);
 if (tcl_eval(&tcl, s, strlen(s)) != FERROR) {
@@ -43,7 +43,7 @@ To make whitespace a part of the word one may use double quotes or braces.
 
 An important part of the language is _command substitution_, when the result of
 a command inside square braces is returned as a part of the outer command, e.g.
-`puts [+ 1 2]`.
+`puts [expr 1 + 2]`.
 
 The only data type of the language is a string. Although it may complicate
 mathematical operations, it opens a broad way for building your own DSLs to
@@ -72,12 +72,14 @@ lose their special meaning and become regular printable characters.
 ParTcl lexer is implemented in one function:
 
 ```
-int tcl_next(const char *s, size_t n, const char **from, const char **to, int *q);
+int tcl_next(const char *list, size_t length, const char **from, const char **to, bool *quote, bool variable);
 ```
 
-`tcl_next` function finds the next token in the string `s`. `from` and `to` are
-set to point to the token start/end, `q` denotes the quoting mode and is
-changed if `"` is met.
+`tcl_next` function finds the next token in the string `list`. Paramters `from` and `to` are
+set to point to the token start/end. Parameter `quote` denotes the quoting mode and is
+changed if `"` is met. Parameter `variable` is for special handling of (unquoted) variable
+names and is set to `true` when `tcl_next` calls itself recursively. When calling the lexer
+from your own code, `variable` should always be set to `false`.
 
 A special macro `tcl_each(s, len, skip_error)` can used to iterate over all the
 tokens in the string. If `skip_error` is false - loop ends when string ends,
@@ -87,8 +89,8 @@ has been read.
 
 ## Data types
 
-Tcl uses strings as a primary data type. When Tcl script is evaluated, many of
-the strings are created, disposed or modified. In embedded systems memory
+Tcl uses strings as a primary data type. When a Tcl script is evaluated, many of
+the strings are created, disposed or modified. In embedded systems, memory
 management can be complex, so all operations with Tcl values are moved into
 isolated functions that can be easily rewritten to optimize certain parts (e.g.
 to use a pool of strings, a custom memory allocator, cache numerical or list
@@ -96,7 +98,7 @@ values to increase performance etc).
 
 ```
 /* Raw string values */
-tcl_value_t *tcl_alloc(const char *s, size_t len);
+tcl_value_t *tcl_value(const char *data, size_t len, bool binary);
 tcl_value_t *tcl_dup(tcl_value_t *v);
 tcl_value_t *tcl_append(tcl_value_t *v, tcl_value_t *tail);
 int tcl_length(tcl_value_t *v);
@@ -123,13 +125,26 @@ some escaping (braces) around each item. It's a simple solution that also
 reduces the code, but in some exotic cases the escaping can become wrong and
 invalid results will be returned.
 
+When creating a value with `tcl_value`, the block of data to initialize the
+value may be marked as "binary". For a binary block is "quoted" in a special
+way, such that it may contain embedded zeroes or any other kind of bytes.
+If the `data` parameter of `tcl_value` has embedded zeroes, it will automatically
+by marked as binary, but the zero byte is not the only problematic character that
+may occur in a binary block. Therefore, if you pass binary data to `tcl_value`,
+set `binary` to `true`.
+
+When appending values to one another with `tcl_append`, if either block is marked 
+as binary, both are joined in binary mode.
+
 ## Environments
 
 A special type, `struct tcl_env` is used to keep the evaluation environment (a
 set of functions). The interpreter creates a new environment for each
 user-defined procedure, also there is one global environment per interpreter.
 
-There are only 3 functions related to the environment. One creates a new environment, another seeks for a variable (or creates a new one), the last one destroys the environment and all its variables.
+There are only 3 functions related to the environment. One creates a new environment, 
+another seeks for a variable (or creates a new one), the last one destroys the environment 
+and all its variables.
 
 These functions use malloc/free, but can easily be rewritten to use memory pools instead.
 
@@ -152,9 +167,9 @@ substitution.
 
 Substitution:
 
-- If argument starts with `$` - create a temporary command `[set name]` and
-  evaluate it. In Tcl `$foo` is just a shortcut to `[set foo]`, which returns
-  the value of "foo" variable in the current environment.
+- If argument starts with `$` - evaluate the name that follows and return
+  the variable's value. If the variable does not exist, an empty variable is
+  created.
 - If argument starts with `[` - evaluate what's inside the square brackets and
   return the result.
 - If argument is a quoted string (e.g. `{foo bar}`) - return it as is, just
@@ -195,15 +210,17 @@ current interpreter commands. That's how user-defined commands are built.
 "while" - `tcl_cmd_while`, runs a while loop `while {cond} {body}`. One may use
 "break", "continue" or "return" inside the loop to contol the flow.
 
-Various math operations are implemented as `tcl_cmd_math`, but can be disabled,
-too if your script doesn't need them (if you want to use ParTcl as a command
-shell, not as a programming language).
+"expr" - `tcl_cmd_expr` interprets the infix expression that follows. This is
+and integer-only expression parser, but supporting most of the Tcl operator set
+(`in` and `ni` are currently missing), with the same precedence levels as the
+official Tcl. The expression parser takes nearly half the size of ParTcl, and
+thus it can be disabled to save space (`#define TCL_DISABLE_MATH`).
 
 ## Building and testing
 
 All sources are in one file, `tcl.c`. It can be used as a standalone
-interpreter, or included as a single-file library (you may want to rename it
-into tcl.h then).
+interpreter, or made part of a bigger application. The structure declarations 
+and function prototypes are in tcl.h.
 
 Tests are run with clang and coverage is calculated. Just run "make test" and
 you're done.
