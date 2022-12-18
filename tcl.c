@@ -33,7 +33,9 @@ SOFTWARE.
 #define DBG(...)
 #endif
 
-#define MAX_VAR_LENGTH 256
+#define MAX_VAR_LENGTH  256
+#define BIN_TOKEN       '\x01'
+#define BIN_SIZE(s)     (*(unsigned short*)((s)+1))
 
 /* Token type and control flow constants */
 enum { TERROR, TCMD, TWORD, TPART };
@@ -54,8 +56,6 @@ static int tcl_is_end(char c) {
 int tcl_next(const char *script, size_t length, const char **from, const char **to, bool *quote) {
   unsigned int i = 0;
   int depth = 0;
-  char open;
-  char close;
 
   DBG("tcl_next(%.*s)+%d+%d|%d\n", length, script, *from - script, *to - script, *quote);
 
@@ -81,13 +81,21 @@ int tcl_next(const char *script, size_t length, const char **from, const char **
 
   if (*script == '[' || (!*quote && *script == '{')) {
     /* Interleaving pairs are not welcome, but it simplifies the code */
-    open = *script;
-    close = (open == '[' ? ']' : '}');
-    for (i = 0, depth = 1; i < length && depth != 0; i++) {
-      if (i > 0 && script[i] == open) {
+    char open = *script;
+    char close = (open == '[' ? ']' : '}');
+    for (i = 1, depth = 1; i < length && depth != 0; i++) {
+      if (script[i] == '\\' && i+1 < length && (script[i+1] == open || script[i+1] == close)) {
+        i++;  /* escaped brace/bracket, skip both '\' and the character that follows it */
+      } else if (script[i] == open) {
         depth++;
       } else if (script[i] == close) {
         depth--;
+      } else if (script[i] == BIN_TOKEN && i+3 < length) {
+        /* skip the binary block */
+        unsigned n = BIN_SIZE(script + i);
+        if (i + n + 2 < length) {
+          i += n + 2;
+        }
       }
     }
   } else if (*script == '"') {
@@ -102,15 +110,19 @@ int tcl_next(const char *script, size_t length, const char **from, const char **
     *from = *to = script + 1;
     return TWORD;
   } else if (*script == ']' || *script == '}') {
-    /* Unbalanced bracket or brace */
-    return TERROR;
+    return TERROR;    /* Unbalanced bracket or brace */
+  } else if (*script == BIN_TOKEN) {
+    i = BIN_SIZE(script) + 3;
+    if (i >= length) {
+      return TERROR;
+    }
   } else {
     while (i < length && (*quote || !tcl_is_space(script[i])) && !tcl_is_special(script[i], *quote)) {
       i++;
     }
   }
   *to = script + i;
-  if (i == length && depth) {
+  if (i > length || (i == length && depth)) {
     return TERROR;
   }
   if (*quote) {
@@ -150,7 +162,18 @@ static struct tcl_parser init_tcl_parser(const char *start, const char *end, int
 /* ------------------------------------------------------- */
 /* ------------------------------------------------------- */
 
-const char *tcl_string(tcl_value_t *v) { return v; }
+const char *tcl_string(tcl_value_t *v) {
+  return (*v == BIN_TOKEN) ? v + 3 : v;
+}
+size_t tcl_length(tcl_value_t *v) {
+  if (!v) {
+    return 0;
+  }
+  if (*v == BIN_TOKEN) {
+    return BIN_SIZE(v);
+  }
+  return strlen(v);
+}
 long tcl_int(tcl_value_t *v) {
   long r = 0;
   if (v) {
@@ -163,23 +186,46 @@ long tcl_int(tcl_value_t *v) {
   }
   return r;
 }
-int tcl_length(tcl_value_t *v) { return v == NULL ? 0 : strlen(v); }
 
 void tcl_free(tcl_value_t *v) {
   assert(v);
   free(v);
 }
 
-tcl_value_t *tcl_append_string(tcl_value_t *v, const char *s, size_t len) {
+bool tcl_binary(const void *blob, size_t len) { /* blob can be a tcl_value_t or byte array */
+  if (!len) {
+    return false;   /* empty block, don't care */
+  }
+  assert(blob);
+  const unsigned char *p = blob;
+  if (*p == BIN_TOKEN) {
+    return true;    /* block is already binary, keep it binary */
+  }
+  while (len--) {
+    if (!*p++) {
+      return true;  /* zero-byte found, this must be a binary blob */
+    }
+  }
+  return false;     /* checks passed, can store as text */
+}
+
+tcl_value_t *tcl_append_string(tcl_value_t *v, const char *data, size_t len, bool binary) {
   size_t n = tcl_length(v);
-  char *b = malloc(n + len + 1);/* allocate 1 byte extra, so that malloc() won't fail if n + len == 0 */
+  size_t prefix = (binary || tcl_binary(v, n) || tcl_binary(data, len)) ? 3 : 0;
+  size_t sz = n + len;
+  char* b = malloc(sz + prefix + 1); /* allocate 1 byte extra, so that malloc() won't fail if n + len == 0 */
   if (b) {
+    if (prefix) {
+      *b = '\x01';
+      unsigned short *u = (unsigned short*)(b + 1);
+      *u = (unsigned short)sz;
+    }
     if (n > 0) {
       assert(v);
-      memcpy(b, v, n);
+      memcpy(b + prefix, tcl_string(v), n);
     }
-    memcpy(b + n, s, len);
-    b[n + len] = 0;             /* set extra byte that was allocated to 0 */
+    memcpy(b + prefix + n, data, len);
+    b[prefix + n + len] = 0;           /* set extra byte that was allocated to 0 */
     if (v) {
       free(v);
     }
@@ -189,21 +235,24 @@ tcl_value_t *tcl_append_string(tcl_value_t *v, const char *s, size_t len) {
 }
 
 tcl_value_t *tcl_append(tcl_value_t *v, tcl_value_t *tail) {
-  v = tcl_append_string(v, tcl_string(tail), tcl_length(tail));
+  assert(tail);
+  size_t tlen = tcl_length(tail);
+  v = tcl_append_string(v, tcl_string(tail), tlen, tcl_binary(tail, tlen));
   tcl_free(tail);
   return v;
 }
 
-tcl_value_t *tcl_alloc(const char *s, size_t len) {
-  return tcl_append_string(NULL, s, len);
+tcl_value_t *tcl_value(const char *data, size_t len, bool binary) {
+  return tcl_append_string(NULL, data, len, binary);
 }
 
-tcl_value_t *tcl_dup(tcl_value_t *v) {
-  assert(v);
-  return tcl_alloc(tcl_string(v), tcl_length(v));
+tcl_value_t *tcl_dup(tcl_value_t *value) {
+  assert(value);
+  size_t vlen = tcl_length(value);
+  return tcl_value(tcl_string(value), vlen, tcl_binary(value, vlen));
 }
 
-tcl_value_t *tcl_list_alloc() { return tcl_alloc("", 0); }
+tcl_value_t *tcl_list_alloc() { return tcl_value("", 0, false); }
 
 int tcl_list_length(tcl_value_t *v) {
   int count = 0;
@@ -215,17 +264,20 @@ int tcl_list_length(tcl_value_t *v) {
   return count;
 }
 
-void tcl_list_free(tcl_value_t *v) { free(v); }
+#define tcl_list_free(v) tcl_free(v)
 
 tcl_value_t *tcl_list_at(tcl_value_t *v, int index) {
   int i = 0;
   tcl_each(tcl_string(v), tcl_length(v) + 1, 0) {
     if (p.token == TWORD) {
       if (i == index) {
-        if (p.from[0] == '{') {
-          return tcl_alloc(p.from + 1, p.to - p.from - 2);
+        const char *data = p.from;
+        size_t sz = p.to - p.from;
+        if (*data == '{') {
+          data += 1;
+          sz -= 2;
         }
-        return tcl_alloc(p.from, p.to - p.from);
+        return tcl_value(data, sz, tcl_binary(data, sz));
       }
       i++;
     }
@@ -235,7 +287,7 @@ tcl_value_t *tcl_list_at(tcl_value_t *v, int index) {
 
 tcl_value_t *tcl_list_append(tcl_value_t *v, tcl_value_t *tail) {
   if (tcl_length(v) > 0) {
-    v = tcl_append(v, tcl_alloc(" ", 2));
+    v = tcl_append(v, tcl_value(" ", 1, false));
   }
   if (tcl_length(tail) > 0) {
     int q = 0;
@@ -247,14 +299,14 @@ tcl_value_t *tcl_list_append(tcl_value_t *v, tcl_value_t *tail) {
       }
     }
     if (q) {
-      v = tcl_append(v, tcl_alloc("{", 1));
+      v = tcl_append(v, tcl_value("{", 1, false));
     }
     v = tcl_append(v, tcl_dup(tail));
     if (q) {
-      v = tcl_append(v, tcl_alloc("}", 1));
+      v = tcl_append(v, tcl_value("}", 1, false));
     }
   } else {
-    v = tcl_append(v, tcl_alloc("{}", 2));
+    v = tcl_append(v, tcl_value("{}", 2, false));
   }
   return v;
 }
@@ -294,7 +346,7 @@ static struct tcl_var *tcl_env_var(struct tcl_env *env, tcl_value_t *name) {
   struct tcl_var *var = malloc(sizeof(struct tcl_var));
   var->name = tcl_dup(name);
   var->next = env->vars;
-  var->value = tcl_alloc("", 0);
+  var->value = tcl_value("", 0, false);
   env->vars = var;
   return var;
 }
@@ -332,8 +384,7 @@ tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *v) {
 }
 
 int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result) {
-  DBG("tcl_result %.*s, flow=%d\n", tcl_length(result), tcl_string(result),
-      flow);
+  DBG("tcl_result %.*s, flow=%d\n", tcl_length(result), tcl_string(result), flow);
   tcl_free(tcl->result);
   tcl->result = result;
   return flow;
@@ -342,30 +393,30 @@ int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result) {
 int tcl_subst(struct tcl *tcl, const char *s, size_t len) {
   DBG("subst(%.*s)\n", (int)len, s);
   if (len == 0) {
-    return tcl_result(tcl, FNORMAL, tcl_alloc("", 0));
+    return tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
   }
   switch (s[0]) {
   case '{':
     if (len <= 1) {
-      return tcl_result(tcl, FERROR, tcl_alloc("", 0));
+      return tcl_result(tcl, FERROR, tcl_value("", 0, false));
     }
-    return tcl_result(tcl, FNORMAL, tcl_alloc(s + 1, len - 2));
+    return tcl_result(tcl, FNORMAL, tcl_value(s + 1, len - 2, tcl_binary(s + 1, len - 2)));
   case '$': {
     if (len >= MAX_VAR_LENGTH) {
-      return tcl_result(tcl, FERROR, tcl_alloc("", 0));
+      return tcl_result(tcl, FERROR, tcl_value("", 0, false));
     }
     char buf[5 + MAX_VAR_LENGTH] = "set ";
     strncat(buf, s + 1, len - 1);
     return tcl_eval(tcl, buf, strlen(buf) + 1);
   }
   case '[': {
-    tcl_value_t *expr = tcl_alloc(s + 1, len - 2);
+    tcl_value_t *expr = tcl_value(s + 1, len - 2, tcl_binary(s + 1, len - 2));
     int r = tcl_eval(tcl, tcl_string(expr), tcl_length(expr) + 1);
     tcl_free(expr);
     return r;
   }
   default:
-    return tcl_result(tcl, FNORMAL, tcl_alloc(s, len));
+    return tcl_result(tcl, FNORMAL, tcl_value(s, len, tcl_binary(s, len)));
   }
 }
 
@@ -394,7 +445,7 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
     switch (p.token) {
     case TERROR:
       DBG("eval: FERROR, lexer error\n");
-      return tcl_result(tcl, FERROR, tcl_alloc("", 0));
+      return tcl_result(tcl, FERROR, tcl_value("", 0, false));
     case TWORD:
       DBG("token %.*s, length=%d, cur=%p (3.1.1)\n", (int)(p.to - p.from),
           p.from, (int)(p.to - p.from), cur);
@@ -417,7 +468,7 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
       break;
     case TCMD:
       if (tcl_list_length(list) == 0) {
-        tcl_result(tcl, FNORMAL, tcl_alloc("", 0));
+        tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
       } else {
         int r = tcl_exec_cmd(tcl, list);
         if (r != FNORMAL) {
@@ -448,7 +499,7 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
 void tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, int arity,
                   void *user) {
   struct tcl_cmd *cmd = malloc(sizeof(struct tcl_cmd));
-  cmd->name = tcl_alloc(name, strlen(name));
+  cmd->name = tcl_value(name, strlen(name), false);
   cmd->fn = fn;
   cmd->user = user;
   cmd->arity = arity;
@@ -506,7 +557,7 @@ static int tcl_cmd_proc(struct tcl *tcl, tcl_value_t *args, void *arg) {
   tcl_value_t *name = tcl_list_at(args, 1);
   tcl_register(tcl, tcl_string(name), tcl_user_proc, 0, tcl_dup(args));
   tcl_free(name);
-  return tcl_result(tcl, FNORMAL, tcl_alloc("", 0));
+  return tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
 }
 
 static int tcl_cmd_if(struct tcl *tcl, tcl_value_t *args, void *arg) {
@@ -557,9 +608,8 @@ static int tcl_cmd_while(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   tcl_value_t *cond = tcl_list_at(args, 1);
   tcl_value_t *loop = tcl_list_at(args, 2);
-  int r;
   for (;;) {
-    r = tcl_eval(tcl, tcl_string(cond), tcl_length(cond) + 1);
+    int r = tcl_eval(tcl, tcl_string(cond), tcl_length(cond) + 1);
     if (r != FNORMAL) {
       tcl_free(cond);
       tcl_free(loop);
@@ -570,7 +620,7 @@ static int tcl_cmd_while(struct tcl *tcl, tcl_value_t *args, void *arg) {
       tcl_free(loop);
       return FNORMAL;
     }
-    int r = tcl_eval(tcl, tcl_string(loop), tcl_length(loop) + 1);
+    r = tcl_eval(tcl, tcl_string(loop), tcl_length(loop) + 1);
     switch (r) {
     case FBREAK:
       tcl_free(cond);
@@ -641,13 +691,13 @@ static int tcl_cmd_math(struct tcl *tcl, tcl_value_t *args, void *arg) {
   tcl_free(opval);
   tcl_free(aval);
   tcl_free(bval);
-  return tcl_result(tcl, FNORMAL, tcl_alloc(p, strlen(p)));
+  return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
 }
 #endif
 
 void tcl_init(struct tcl *tcl) {
   tcl->env = tcl_env_alloc(NULL);
-  tcl->result = tcl_alloc("", 0);
+  tcl->result = tcl_value("", 0, false);
   tcl->cmds = NULL;
   tcl_register(tcl, "set", tcl_cmd_set, 0, NULL);
   tcl_register(tcl, "subst", tcl_cmd_subst, 2, NULL);

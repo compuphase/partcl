@@ -42,16 +42,23 @@ int tcl_eval(struct tcl *tcl, const char *script, size_t length);
 
 
 /* =========================================================================
-    Values
+    Values & lists
    ========================================================================= */
 
-/** tcl_string() returns a pointer to the start of the contents of a value
- *  (where the value is assumed to be a string).
+/** tcl_string() returns a pointer to the start of the contents of a value. If
+ ** the value is binary blob, it returns a pointer to the start of the raw data.
  *  \param v        The value.
  *
  *  \return A pointer to the buffer.
  */
 const char *tcl_string(tcl_value_t *v);
+
+/** tcl_length() returns the length of the contents of the value in bytes.
+ *  \param v        The value.
+ *
+ *  \return The number of bytes in the buffer of the value.
+ */
+size_t tcl_length(tcl_value_t *v);
 
 /** tcl_int() returns the value of a variable after parsing it as an integer
  *  value. The function supports decimal, octal and dexadecimal notation.
@@ -61,12 +68,29 @@ const char *tcl_string(tcl_value_t *v);
  */
 long tcl_int(tcl_value_t *v);
 
-/** tcl_length() returns the length of the contents of the value in bytes.
- *  \param v        The value.
+/** tcl_value() creates a value from a C string or data block.
+ *  \param data     The contents to store in the value.
+ *  \param len      The length of the data.
+ *  \param binary   If true, the contents of "data" is considered a binary blob
  *
- *  \return The number of bytes in the buffer of the value.
+ *  \return A pointer to the created value.
+ *
+ *  \note The value should be deleted with tcl_free().
+ *
+ *  \note Even if parameter "binary" is false, the data block may be stored as
+ *        binary, based on its contents.
  */
-int tcl_length(tcl_value_t *v);
+tcl_value_t *tcl_value(const char *data, size_t len, bool binary);
+
+/** tcl_free() deallocates a value or a list.
+ *  \param v          The value.
+ *
+ *  \note Lists are implemented as values, so tcl_free() frees lists as well.
+ */
+void tcl_free(tcl_value_t *v);
+
+int tcl_list_length(tcl_value_t *v);
+tcl_value_t *tcl_list_at(tcl_value_t *v, int index);
 
 
 /* =========================================================================
@@ -102,6 +126,8 @@ typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, tcl_value_t *args, void *user);
  *  \param user     A user value (which is passed to the C function).
  */
 void tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, int arity, void *user);
+
+int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result);
 
 
 /* =========================================================================
