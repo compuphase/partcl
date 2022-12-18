@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 #include <assert.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,94 +42,102 @@ SOFTWARE.
 enum { TERROR, TCMD, TWORD, TPART };
 enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN };
 
-static int tcl_is_special(char c, int q) {
-  return (c == '$' || (!q && (c == '{' || c == '}' || c == ';' || c == '\r' ||
-                              c == '\n')) ||
-          c == '[' || c == ']' || c == '"' || c == '\0');
+static bool tcl_is_operator(char c) {
+  return (c == '|' || c == '&' || c == '~' || c == '<' || c == '>' ||
+          c == '=' || c == '!' || c == '-' || c == '+' || c == '*' ||
+          c == '/' || c == '%' || c == '(' || c == ')');
+}
+static bool tcl_is_special(char c, int q) {
+  return (c == '$' || c == '[' || c == ']' || c == '"' || c == '\0' ||
+          (!q && (c == '{' || c == '}' || c == ';' || c == '\r' || c == '\n')) );
 }
 
-static int tcl_is_space(char c) { return (c == ' ' || c == '\t'); }
+static bool tcl_is_space(char c) { return (c == ' ' || c == '\t'); }
 
-static int tcl_is_end(char c) {
+static bool tcl_is_end(char c) {
   return (c == '\n' || c == '\r' || c == ';' || c == '\0');
 }
 
-int tcl_next(const char *script, size_t length, const char **from, const char **to, bool *quote) {
+static int tcl_next(const char *list, size_t length, const char **from, const char **to,
+                    bool *quote, bool variable) {
   unsigned int i = 0;
   int depth = 0;
 
-  DBG("tcl_next(%.*s)+%d+%d|%d\n", length, script, *from - script, *to - script, *quote);
+  DBG("tcl_next(%.*s)+%d+%d|%d\n", length, list, *from - list, *to - list, *quote);
 
   /* Skip leading spaces if not quoted */
-  for (; !*quote && length > 0 && tcl_is_space(*script); script++, length--)
+  for (; !*quote && length > 0 && tcl_is_space(*list); list++, length--)
     {}
-  *from = script;
+  *from = list;
   /* Terminate command if not quoted */
-  if (!*quote && length > 0 && tcl_is_end(*script)) {
-    *to = script + 1;
+  if (!*quote && length > 0 && tcl_is_end(*list)) {
+    *to = list + 1;
     return TCMD;
   }
-  if (*script == '$') { /* Variable token, must not start with a space or quote */
-    if (tcl_is_space(script[1]) || script[1] == '"') {
+  if (*list == '$') { /* Variable token, must not start with a space or quote */
+    if (tcl_is_space(list[1]) || list[1] == '"') {
       return TERROR;
     }
     int mode = *quote;
     *quote = 0;
-    int r = tcl_next(script + 1, length - 1, to, to, quote);
+    int r = tcl_next(list + 1, length - 1, to, to, quote, true);
     *quote = mode;
     return ((r == TWORD && *quote) ? TPART : r);
   }
 
-  if (*script == '[' || (!*quote && *script == '{')) {
+  if (*list == '[' || (!*quote && *list == '{')) {
     /* Interleaving pairs are not welcome, but it simplifies the code */
-    char open = *script;
+    char open = *list;
     char close = (open == '[' ? ']' : '}');
     for (i = 1, depth = 1; i < length && depth != 0; i++) {
-      if (script[i] == '\\' && i+1 < length && (script[i+1] == open || script[i+1] == close)) {
+      if (list[i] == '\\' && i+1 < length && (list[i+1] == open || list[i+1] == close)) {
         i++;  /* escaped brace/bracket, skip both '\' and the character that follows it */
-      } else if (script[i] == open) {
+      } else if (list[i] == open) {
         depth++;
-      } else if (script[i] == close) {
+      } else if (list[i] == close) {
         depth--;
-      } else if (script[i] == BIN_TOKEN && i+3 < length) {
+      } else if (list[i] == BIN_TOKEN && i+3 < length) {
         /* skip the binary block */
-        unsigned n = BIN_SIZE(script + i);
+        unsigned n = BIN_SIZE(list + i);
         if (i + n + 2 < length) {
           i += n + 2;
         }
       }
     }
-  } else if (*script == '"') {
+  } else if (*list == '"') {
     *quote = !*quote;
-    *from = *to = script + 1;
+    *from = *to = list + 1;
     if (*quote) {
       return TPART;
     }
-    if (length < 2 || (!tcl_is_space(script[1]) && !tcl_is_end(script[1]))) {
+    if (length < 2 || (!tcl_is_space(list[1]) && !tcl_is_end(list[1]))) {
       return TERROR;
     }
-    *from = *to = script + 1;
+    *from = *to = list + 1;
     return TWORD;
-  } else if (*script == ']' || *script == '}') {
+  } else if (*list == ']' || *list == '}') {
     return TERROR;    /* Unbalanced bracket or brace */
-  } else if (*script == BIN_TOKEN) {
-    i = BIN_SIZE(script) + 3;
+  } else if (*list == BIN_TOKEN) {
+    i = BIN_SIZE(list) + 3;
     if (i >= length) {
       return TERROR;
     }
   } else {
-    while (i < length && (*quote || !tcl_is_space(script[i])) && !tcl_is_special(script[i], *quote)) {
+    while (i < length &&                              /* run until string completed... */
+           (*quote || !tcl_is_space(list[i])) &&      /* ... and no whitespace (unless quoted) ... */
+           !(variable && tcl_is_operator(list[i])) && /* ... and no operator in variable mode ... */
+           !tcl_is_special(list[i], *quote)) {        /* ... and no special characters (where "special" depends on quote status) */
       i++;
     }
   }
-  *to = script + i;
+  *to = list + i;
   if (i > length || (i == length && depth)) {
     return TERROR;
   }
   if (*quote) {
     return TPART;
   }
-  return (tcl_is_space(script[i]) || tcl_is_end(script[i])) ? TWORD : TPART;
+  return (tcl_is_space(list[i]) || tcl_is_end(list[i])) ? TWORD : TPART;
 }
 
 /* A helper parser struct and macro (requires C99) */
@@ -152,7 +161,7 @@ static struct tcl_parser init_tcl_parser(const char *start, const char *end, int
   for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR);        \
        p.start < p.end &&                                                      \
        (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,         \
-                             &p.quote)) != TERROR) ||                          \
+                             &p.quote, false)) != TERROR) ||                   \
         (skiperr));                                                            \
        p.start = p.to)
 
@@ -384,7 +393,7 @@ tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
 }
 
 static void tcl_markposition(struct tcl *tcl, const char *pos) {
-  if (!tcl->env->parent) {
+  if (!tcl->env->parent && tcl->nestlevel == 1) {
     tcl->errorpos = pos;
   }
 }
@@ -445,25 +454,27 @@ static int tcl_exec_cmd(struct tcl *tcl, tcl_value_t *list) {
 
 int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
   DBG("eval(%.*s)->\n", (int)len, s);
+  tcl->nestlevel += 1;
   tcl_value_t *list = tcl_list_alloc();
   tcl_value_t *cur = NULL;
+  int result = FNORMAL;
   tcl_each(s, len, 1) {
     DBG("tcl_next %d %.*s\n", p.token, (int)(p.to - p.from), p.from);
     tcl_markposition(tcl, p.from);
     switch (p.token) {
     case TERROR:
       DBG("eval: FERROR, lexer error\n");
-      tcl_list_free(list);
-      return tcl_result(tcl, FERROR, tcl_value("", 0, false));
+      result = tcl_result(tcl, FERROR, tcl_value("", 0, false));
+      break;
     case TWORD:
       DBG("token %.*s, length=%d, cur=%p (3.1.1)\n", (int)(p.to - p.from),
           p.from, (int)(p.to - p.from), cur);
       if (cur != NULL) {
-        tcl_subst(tcl, p.from, p.to - p.from);
+        result = tcl_subst(tcl, p.from, p.to - p.from);
         tcl_value_t *part = tcl_dup(tcl->result);
         cur = tcl_append(cur, part);
       } else {
-        tcl_subst(tcl, p.from, p.to - p.from);
+        result = tcl_subst(tcl, p.from, p.to - p.from);
         cur = tcl_dup(tcl->result);
       }
       list = tcl_list_append(list, cur);
@@ -471,33 +482,32 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
       cur = NULL;
       break;
     case TPART:
-      tcl_subst(tcl, p.from, p.to - p.from);
+      result = tcl_subst(tcl, p.from, p.to - p.from);
       tcl_value_t *part = tcl_dup(tcl->result);
       cur = tcl_append(cur, part);
       break;
     case TCMD:
       if (tcl_list_length(list) == 0) {
-        tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
+        result = tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
       } else {
-        int r = tcl_exec_cmd(tcl, list);
-        if (r != FNORMAL) {
-          tcl_list_free(list);
-          return r;
-        }
+        result = tcl_exec_cmd(tcl, list);
       }
       tcl_list_free(list);
       list = tcl_list_alloc();
       break;
     }
+    if (result == FERROR) {
+      break;
+    }
   }
   /* when arrived at the end of the buffer, if the list is non-empty, run that
      last command */
-  int r = FNORMAL;
-  if (tcl_list_length(list) > 0) {
-    r = tcl_exec_cmd(tcl, list);
+  if (result == FNORMAL && tcl_list_length(list) > 0) {
+    result = tcl_exec_cmd(tcl, list);
   }
   tcl_list_free(list);
-  return r;
+  tcl->nestlevel -= 1;
+  return result;
 }
 
 /* --------------------------------- */
@@ -649,60 +659,407 @@ static int tcl_cmd_while(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
 }
 
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
+
 #ifndef TCL_DISABLE_MATH
-static int tcl_cmd_math(struct tcl *tcl, tcl_value_t *args, void *arg) {
-  (void)arg;
-  char buf[64];
-  tcl_value_t *opval = tcl_list_at(args, 0);
-  tcl_value_t *aval = tcl_list_at(args, 1);
-  tcl_value_t *bval = tcl_list_at(args, 2);
-  const char *op = tcl_string(opval);
-  int a = tcl_int(aval);
-  int b = tcl_int(bval);
-  int c = 0;
-  if (op[0] == '+') {
-    c = a + b;
-  } else if (op[0] == '-') {
-    c = a - b;
-  } else if (op[0] == '*') {
-    c = a * b;
-  } else if (op[0] == '/') {
-    c = a / b;
-  } else if (op[0] == '>' && op[1] == '\0') {
-    c = a > b;
-  } else if (op[0] == '>' && op[1] == '=') {
-    c = a >= b;
-  } else if (op[0] == '<' && op[1] == '\0') {
-    c = a < b;
-  } else if (op[0] == '<' && op[1] == '=') {
-    c = a <= b;
-  } else if (op[0] == '=' && op[1] == '=') {
-    c = a == b;
-  } else if (op[0] == '!' && op[1] == '=') {
-    c = a != b;
+enum {
+  TOK_END_EXPR = 0,
+  TOK_NUMBER = 256,
+  TOK_OR,           /* || */
+  TOK_AND,          /* && */
+  TOK_EQ,           /* == */
+  TOK_NE,           /* != */
+  TOK_GE,           /* >= */
+  TOK_LE,           /* <= */
+  TOK_SHL,          /* << */
+  TOK_SHR,          /* >> */
+  TOK_EXP,          /* ** */
+};
+
+enum {
+  eNONE = 0,        /* no error */
+  eNUM_EXPECT,      /* number expected */
+  eINVALID_NUM,     /* invalid number syntax */
+  ePARENTHESES,     /* unbalanced parentheses */
+  eEXTRA_CHARS,     /* extra characters after expression (missing operator?) */
+  eINVALID_CHAR,
+  eDIV0,            /* divide by zero */
+};
+
+struct expr {
+  const char *pos;  /* current position in expression */
+  int token;        /* current token */
+  int lexflag;
+  long lnumber;     /* literal value */
+  int error;
+};
+
+static long expr_logic_or(struct expr *expr);
+#define lex(e)          ((e)->lexflag ? ((e)->lexflag = 0, (e)->token) : expr_lex(e) )
+#define unlex(e)        ((e)->lexflag = 1)
+
+static void expr_error(struct expr *expr, int number) {
+  if (expr->error == eNONE)
+    expr->error = number;
+  assert(expr->pos != NULL);
+  while (*expr->pos != '\0')
+    expr->pos += 1; /* skip rest of string, to forcibly end parsing */
+}
+
+static void expr_skip(struct expr *expr, int number) {
+  while (*expr->pos != '\0' && number-- > 0)
+    expr->pos++;
+  while (*expr->pos != '\0' && *expr->pos <= ' ')
+    expr->pos++;
+}
+
+static int expr_lex(struct expr *expr) {
+  static const char special[] = "|&~<>=!-+*/%()";
+
+  assert(expr && expr->pos);
+  if (*expr->pos == '\0') {
+    expr->token = TOK_END_EXPR;
+    return expr->token;
   }
 
+  if (strchr(special, *expr->pos) != NULL) {
+    expr->token = (int)*expr->pos;
+    expr->pos += 1; /* don't skip whitespace yet, first check for multi-character operators */
+    switch (expr->token) {
+    case '|':
+      if (*expr->pos == '|') {
+        expr->token = TOK_OR;
+        expr->pos += 1;
+      }
+      break;
+    case '&':
+      if (*expr->pos == '&') {
+        expr->token = TOK_AND;
+        expr->pos += 1;
+      }
+      break;
+    case '=':
+      if (*expr->pos == '=') {
+        expr->token = TOK_EQ;
+        expr->pos += 1;
+      }
+      break;
+    case '!':
+      if (*expr->pos == '=') {
+        expr->token = TOK_NE;
+        expr->pos += 1;
+      }
+      break;
+    case '<':
+      if (*expr->pos == '=') {
+        expr->token = TOK_LE;
+        expr->pos += 1;
+      } else if (*expr->pos == '<') {
+        expr->token = TOK_SHL;
+        expr->pos += 1;
+      }
+      break;
+    case '>':
+      if (*expr->pos == '=') {
+        expr->token = TOK_GE;
+        expr->pos += 1;
+      } else if (*expr->pos == '>') {
+        expr->token = TOK_SHR;
+        expr->pos += 1;
+      }
+      break;
+    case '*':
+      if (*expr->pos == '*') {
+        expr->token = TOK_EXP;
+        expr->pos += 1;
+      }
+      break;
+    }
+    expr_skip(expr, 0);          /* erase white space */
+  } else if (isdigit(*expr->pos)) {
+    char *ptr;
+    expr->token = TOK_NUMBER;
+    expr->lnumber = strtol(expr->pos, &ptr, 0);
+    expr->pos = ptr;
+    if (isalpha(*expr->pos) || *expr->pos == '.' || *expr->pos == ',')
+      expr_error(expr, eINVALID_NUM);
+    expr_skip(expr, 0);          /* erase white space */
+  } else {
+    expr_error(expr, eINVALID_CHAR);
+    expr->token = TOK_END_EXPR;
+  }
+  return expr->token;
+}
+
+static long expr_primary(struct expr *expr) {
+  long v = 0;
+  switch (lex(expr)) {
+  case '-':
+    v = -expr_primary(expr);
+    break;
+  case '+':
+    v = -expr_primary(expr);
+    break;
+  case '!':
+    v = !expr_primary(expr);
+    break;
+  case '~':
+    v = ~expr_primary(expr);
+    break;
+  case '(':
+    v = expr_logic_or(expr);
+    if (lex(expr) != ')')
+      expr_error(expr, ePARENTHESES);
+    break;
+  case TOK_NUMBER:
+    v = expr->lnumber;
+    break;
+  default:
+    expr_error(expr, eNUM_EXPECT);
+  }
+  return v;
+}
+
+static long expr_power(struct expr *expr) {
+  long v1 = expr_primary(expr);
+  while (lex(expr) == TOK_EXP) {
+    long v2 = expr_power(expr); /* right-to-left associativity */
+    if (v2 < 0) {
+      v1 = 0;
+    } else {
+      long n = v1;
+      v1 = 1;
+      while (v2--)
+        v1 *= n;
+    }
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_product(struct expr *expr) {
+  long v1 = expr_power(expr);
+  int op;
+  while ((op = lex(expr)) == '*' || op == '/' || op == '%') {
+    long v2 = expr_power(expr);
+    if (op == '*') {
+      v1 *= v2;
+    } else {
+      if (v2 != 0L) {
+        if (op == '/')
+          v1 /= v2;
+        else
+          v1 = v1 % v2;
+      } else {
+        expr_error(expr, eDIV0);
+      }
+    }
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_sum(struct expr *expr) {
+  long v1 = expr_product(expr);
+  int op;
+  while ((op = lex(expr)) == '+' || op == '-') {
+    long v2 = expr_product(expr);
+    if (op == '+')
+      v1 += v2;
+    else
+      v1 -= v2;
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_shift(struct expr *expr) {
+  long v1 = expr_sum(expr);
+  int op;
+  while ((op = lex(expr)) == TOK_SHL || op == TOK_SHR) {
+    long v2 = expr_sum(expr);
+    if (op == TOK_SHL)
+      v1 = (v1 << v2);
+    else
+      v1 = (v1 >> v2);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_relational(struct expr *expr) {
+  long v1 = expr_shift(expr);
+  int op;
+  while ((op = lex(expr)) == '<' || op == '>' || op == TOK_LE || op == TOK_GE) {
+    long v2 = expr_shift(expr);
+    switch (op) {
+    case '<':
+      v1 = (v1 < v2);
+      break;
+    case '>':
+      v1 = (v1 > v2);
+      break;
+    case TOK_LE:
+      v1 = (v1 <= v2);
+      break;
+    case TOK_GE:
+      v1 = (v1 >= v2);
+      break;
+    }
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_equality(struct expr *expr) {
+  long v1 = expr_relational(expr);
+  int op;
+  while ((op = lex(expr)) == TOK_EQ || op == TOK_NE) {
+    long v2 = expr_relational(expr);
+    if (op == TOK_EQ)
+      v1 = (v1 == v2);
+    else
+      v1 = (v1 != v2);
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_binary_and(struct expr *expr) {
+  long v1 = expr_equality(expr);
+  while (lex(expr) == '&') {
+    long v2 = expr_equality(expr);
+    v1 = v1 & v2;
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_binary_xor(struct expr *expr) {
+  long v1 = expr_binary_and(expr);
+  while (lex(expr) == '^') {
+    long v2 = expr_binary_and(expr);
+    v1 = v1 ^ v2;
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_binary_or(struct expr *expr) {
+  long v1 = expr_binary_xor(expr);
+  while (lex(expr) == '|') {
+    long v2 = expr_binary_xor(expr);
+    v1 = v1 | v2;
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_logic_and(struct expr *expr) {
+  long v1 = expr_binary_or(expr);
+  while (lex(expr) == TOK_AND) {
+    long v2 = expr_binary_or(expr);
+    v1 = v1 && v2;
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_logic_or(struct expr *expr) {
+  long v1 = expr_logic_and(expr);
+  while (lex(expr) == TOK_OR) {
+    long v2 = expr_logic_and(expr);
+    v1 = v1 || v2;
+  }
+  unlex(expr);
+  return v1;
+}
+
+static int tcl_expression(const char *expression, long *result)
+{
+  int op;
+
+  struct expr expr;
+  memset(&expr, 0, sizeof(expr));
+  expr.pos = expression;
+  expr_skip(&expr, 0);            /* erase leading white space */
+  *result = expr_logic_or(&expr);
+  expr_skip(&expr, 0);            /* erase trailing white space */
+  if (expr.error == eNONE) {
+    op = lex(&expr);
+    if (op == ')')
+      expr_error(&expr, ePARENTHESES);
+    else if (op != TOK_END_EXPR)
+      expr_error(&expr, eEXTRA_CHARS);
+  }
+  return expr.error;
+}
+
+static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+
+  /* re-construct the expression (it may have been tokenized by the Tcl Lexer) */
+  int count = tcl_list_length(args);
+  size_t total = 256;
+  char *expression = malloc(total);
+  if (!expression) {
+    return tcl_result(tcl, FERROR, tcl_value("", 0, false));
+  }
+  *expression = '\0';
+  for (int idx = 1; idx < count; idx++) {
+    tcl_value_t *tok = tcl_list_at(args, idx);
+    if (strlen(expression) + tcl_length(tok) + 1 >= total) {  /* may need to grow the buffer */
+      size_t newsize = 2 * total;
+      char *newbuf = malloc(newsize);
+      if (newbuf) {
+        strcpy(newbuf, expression);
+        free(expression);
+        expression = newbuf;
+        total = newsize;
+      }
+    }
+    if (strlen(expression) + tcl_length(tok) < total) {
+      if (strlen(expression) > 0)
+        strcat(expression, " ");
+      strcat(expression, tcl_string(tok));
+    }
+    tcl_free(tok);
+  }
+  /* parse expression */
+  long result;
+  int err = tcl_expression(expression, &result);
+  free(expression);
+
+  /* convert result to string */
+  char buf[64] = "";
   char *p = buf + sizeof(buf) - 1;
-  char neg = (c < 0);
-  *p-- = 0;
+  *p-- = '\0';
+  bool neg = (result < 0);
   if (neg) {
-    c = -c;
+    result = -result;
   }
   do {
-    *p-- = '0' + (c % 10);
-    c = c / 10;
-  } while (c > 0);
+    *p-- = '0' + (result % 10);
+    result = result / 10;
+  } while (result > 0);
   if (neg) {
     *p-- = '-';
   }
   p++;
 
-  tcl_free(opval);
-  tcl_free(aval);
-  tcl_free(bval);
-  return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
+  return tcl_result(tcl, (err == eNONE) ? FNORMAL : FERROR, tcl_value(p, strlen(p), false));
 }
-#endif
+#endif  /* TCL_DISABLE_MATH */
+
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
+/* ------------------------------------------------------- */
 
 void tcl_init(struct tcl *tcl) {
   memset(tcl, 0, sizeof(struct tcl));
@@ -720,10 +1077,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "break", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
 #ifndef TCL_DISABLE_MATH
-  char *math[] = {"+", "-", "*", "/", ">", ">=", "<", "<=", "==", "!="};
-  for (unsigned int i = 0; i < (sizeof(math) / sizeof(math[0])); i++) {
-    tcl_register(tcl, math[i], tcl_cmd_math, 3, NULL);
-  }
+  tcl_register(tcl, "expr", tcl_cmd_expr, 0, NULL);
 #endif
 }
 
@@ -801,57 +1155,3 @@ const char *tcl_cobs_decode(const char *asciiz, size_t *length) {
   return bindata;
 }
 
-#ifdef TEST
-#define CHUNK 1024
-
-int main() {
-  struct tcl tcl;
-  int buflen = CHUNK;
-  char *buf = malloc(buflen);
-  int i = 0;
-
-  tcl_init(&tcl);
-  while (1) {
-    int inp = fgetc(stdin);
-
-    if (i > buflen - 1) {
-      buf = realloc(buf, buflen += CHUNK);
-    }
-
-    if (inp == 0 || inp == EOF) {
-      break;
-    }
-
-    buf[i++] = inp;
-
-    tcl_each(buf, i, 1) {
-      if (p.token == TERROR && (p.to - buf) != i) {
-        memset(buf, 0, buflen);
-        i = 0;
-        break;
-      } else if (p.token == TCMD && *(p.from) != '\0') {
-        int r = tcl_eval(&tcl, buf, strlen(buf));
-        if (r != FERROR) {
-          printf("result> %.*s\n", tcl_length(tcl.result),
-                 tcl_string(tcl.result));
-        } else {
-          printf("?!\n");
-        }
-
-        memset(buf, 0, buflen);
-        i = 0;
-        break;
-      }
-    }
-  }
-
-  free(buf);
-
-  if (i) {
-    printf("incomplete input\n");
-    return -1;
-  }
-
-  return 0;
-}
-#endif

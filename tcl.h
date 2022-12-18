@@ -11,6 +11,7 @@ struct tcl {
   struct tcl_cmd *cmds;
   tcl_value_t *result;
   const char *errorpos;
+  int nestlevel;
 };
 
 
@@ -110,23 +111,6 @@ tcl_value_t *tcl_list_at(tcl_value_t *v, int index);
  *        created, with empty contents.
  */
 tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value);
-
-
-/* =========================================================================
-    Low level interface
-   ========================================================================= */
-
-/** tcl_next() gets the next token from the stream (lexical analysis).
- *  \param script   The buffer with the script.
- *  \param length   The size of the "script" buffer.
- *  \param from     [out] Is set to the start of the token, on return.
- *  \param to       [out] Is set to just behind the end of the token, on return.
- *  \param quote    [out] Is set to true when inside a quoted string, or false if
- *                  otherwise.
- *
- *  \return The token type (0 = parsing error).
- */
-int tcl_next(const char *script, size_t length, const char **from, const char **to, bool *quote);
 
 
 /* =========================================================================
