@@ -364,8 +364,8 @@ static struct tcl_env *tcl_env_free(struct tcl_env *env) {
   return parent;
 }
 
-tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *v) {
-  DBG("var(%s := %.*s)\n", tcl_string(name), tcl_length(v), tcl_string(v));
+tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
+  DBG("var(%s := %.*s)\n", tcl_string(name), tcl_length(value), tcl_string(value));
   struct tcl_var *var;
   for (var = tcl->env->vars; var != NULL; var = var->next) {
     if (strcmp(tcl_string(var->name), tcl_string(name)) == 0) {
@@ -375,12 +375,18 @@ tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *v) {
   if (var == NULL) {
     var = tcl_env_var(tcl->env, name);
   }
-  if (v != NULL) {
+  if (value != NULL) {
     tcl_free(var->value);
-    var->value = tcl_dup(v);
-    tcl_free(v);
+    var->value = tcl_dup(value);
+    tcl_free(value);
   }
   return var->value;
+}
+
+static void tcl_markposition(struct tcl *tcl, const char *pos) {
+  if (!tcl->env->parent) {
+    tcl->errorpos = pos;
+  }
 }
 
 int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result) {
@@ -405,9 +411,10 @@ int tcl_subst(struct tcl *tcl, const char *s, size_t len) {
     if (len >= MAX_VAR_LENGTH) {
       return tcl_result(tcl, FERROR, tcl_value("", 0, false));
     }
-    char buf[5 + MAX_VAR_LENGTH] = "set ";
-    strncat(buf, s + 1, len - 1);
-    return tcl_eval(tcl, buf, strlen(buf) + 1);
+    tcl_value_t *name = tcl_value(s + 1, len - 1, false);
+    int r = tcl_result(tcl, FNORMAL, tcl_dup(tcl_var(tcl, name, NULL)));
+    tcl_free(name);
+    return r;
   }
   case '[': {
     tcl_value_t *expr = tcl_value(s + 1, len - 2, tcl_binary(s + 1, len - 2));
@@ -442,9 +449,11 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
   tcl_value_t *cur = NULL;
   tcl_each(s, len, 1) {
     DBG("tcl_next %d %.*s\n", p.token, (int)(p.to - p.from), p.from);
+    tcl_markposition(tcl, p.from);
     switch (p.token) {
     case TERROR:
       DBG("eval: FERROR, lexer error\n");
+      tcl_list_free(list);
       return tcl_result(tcl, FERROR, tcl_value("", 0, false));
     case TWORD:
       DBG("token %.*s, length=%d, cur=%p (3.1.1)\n", (int)(p.to - p.from),
@@ -696,9 +705,9 @@ static int tcl_cmd_math(struct tcl *tcl, tcl_value_t *args, void *arg) {
 #endif
 
 void tcl_init(struct tcl *tcl) {
+  memset(tcl, 0, sizeof(struct tcl));
   tcl->env = tcl_env_alloc(NULL);
   tcl->result = tcl_value("", 0, false);
-  tcl->cmds = NULL;
   tcl_register(tcl, "set", tcl_cmd_set, 0, NULL);
   tcl_register(tcl, "subst", tcl_cmd_subst, 2, NULL);
 #ifndef TCL_DISABLE_PUTS
@@ -730,6 +739,7 @@ void tcl_destroy(struct tcl *tcl) {
     free(cmd);
   }
   tcl_free(tcl->result);
+  memset(tcl, 0, sizeof(struct tcl));
 }
 
 const char *tcl_cobs_encode(const char *bindata, size_t *length) {

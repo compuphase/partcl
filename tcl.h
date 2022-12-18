@@ -10,6 +10,7 @@ struct tcl {
   struct tcl_env *env;
   struct tcl_cmd *cmds;
   tcl_value_t *result;
+  const char *errorpos;
 };
 
 
@@ -94,6 +95,24 @@ tcl_value_t *tcl_list_at(tcl_value_t *v, int index);
 
 
 /* =========================================================================
+    Variables
+   ========================================================================= */
+
+/** tcl_var() sets or reads a variable
+ *  \param tcl      The interpreter context.
+ *  \param name     The name of the variable.
+ *  \param value    The value to set the variable to, or NULL to read the value
+ *                  of the variable.
+ *
+ *  \return A pointer to the value in the variable.
+ *
+ *  \note When reading a variable that does not exist, an new variable is
+ *        created, with empty contents.
+ */
+tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value);
+
+
+/* =========================================================================
     Low level interface
    ========================================================================= */
 
@@ -127,6 +146,15 @@ typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, tcl_value_t *args, void *user);
  */
 void tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, int arity, void *user);
 
+/** tcl_result() sets the result of a C function into the ParTcl environment.
+ *  \param tcl      The interpreter context.
+ *  \param flow     Should be set to 0 if an error occurred, or 1 on success
+ *                  (other values for "flow" are used internally).
+ *  \param result   The result (or "return value") of the C function.
+ *
+ *  \return This function returs the "flow" parameter. For the C interface, the
+ *          return value can be ignored.
+ */
 int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result);
 
 
