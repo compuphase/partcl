@@ -42,6 +42,8 @@ SOFTWARE.
 enum { TERROR, TCMD, TWORD, TPART };
 enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN };
 
+#define MARKFLOW(f, e)  ((f) | ((e) << 8))
+
 /* Lexer flags & options */
 #define LEX_QUOTE   0x01  /* inside a double-quote section */
 #define LEX_VAR     0x02  /* special mode for parsing variable names */
@@ -423,7 +425,10 @@ int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result) {
   DBG("tcl_result %.*s, flow=%d\n", tcl_length(result), tcl_string(result), flow);
   tcl_free(tcl->result);
   tcl->result = result;
-  return flow;
+  if ((flow & 0xff) == FERROR && tcl->errorcode == 0) {
+    tcl->errorcode = flow >> 8;
+  }
+  return flow & 0xff;
 }
 
 int tcl_subst(struct tcl *tcl, const char *s, size_t len) {
@@ -434,12 +439,12 @@ int tcl_subst(struct tcl *tcl, const char *s, size_t len) {
   switch (s[0]) {
   case '{':
     if (len <= 1) {
-      return tcl_result(tcl, FERROR, tcl_value("", 0, false));
+      return tcl_result(tcl, MARKFLOW(FERROR, TCLERR_SYNTAX), tcl_value("", 0, false));
     }
     return tcl_result(tcl, FNORMAL, tcl_value(s + 1, len - 2, tcl_binary(s + 1, len - 2)));
   case '$': {
     if (len >= MAX_VAR_LENGTH) {
-      return tcl_result(tcl, FERROR, tcl_value("", 0, false));
+      return tcl_result(tcl, MARKFLOW(FERROR, TCLERR_VARNAME), tcl_value("", 0, false));
     }
     tcl_value_t *name = tcl_value(s + 1, len - 1, false);
     int r = tcl_result(tcl, FNORMAL, tcl_dup(tcl_var(tcl, name, NULL)));
@@ -485,7 +490,7 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
     switch (p.token) {
     case TERROR:
       DBG("eval: FERROR, lexer error\n");
-      result = tcl_result(tcl, FERROR, tcl_value("", 0, false));
+      result = tcl_result(tcl, MARKFLOW(FERROR, TCLERR_SYNTAX), tcl_value("", 0, false));
       break;
     case TWORD:
       DBG("token %.*s, length=%d, cur=%p (3.1.1)\n", (int)(p.to - p.from),
@@ -1026,7 +1031,7 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   size_t total = 256;
   char *expression = malloc(total);
   if (!expression) {
-    return tcl_result(tcl, FERROR, tcl_value("", 0, false));
+    return tcl_result(tcl, MARKFLOW(FERROR, TCLERR_MEMORY), tcl_value("", 0, false));
   }
   *expression = '\0';
   for (int idx = 1; idx < count; idx++) {
@@ -1070,7 +1075,8 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
   p++;
 
-  return tcl_result(tcl, (err == eNONE) ? FNORMAL : FERROR, tcl_value(p, strlen(p), false));
+  return tcl_result(tcl, (err == eNONE) ? FNORMAL : MARKFLOW(FERROR, TCLERR_EXPR),
+                    tcl_value(p, strlen(p), false));
 }
 
 /* ------------------------------------------------------- */
@@ -1086,17 +1092,15 @@ void tcl_init(struct tcl *tcl) {
   tcl->result = tcl_value("", 0, false);
   tcl_register(tcl, "set", tcl_cmd_set, 0, NULL);
   tcl_register(tcl, "subst", tcl_cmd_subst, 2, NULL);
-#ifndef TCL_DISABLE_PUTS
-  tcl_register(tcl, "puts", tcl_cmd_puts, 2, NULL);
-#endif
   tcl_register(tcl, "proc", tcl_cmd_proc, 4, NULL);
   tcl_register(tcl, "if", tcl_cmd_if, 0, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, NULL);
   tcl_register(tcl, "return", tcl_cmd_flow, 0, NULL);
   tcl_register(tcl, "break", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
-#ifndef TCL_DISABLE_MATH
   tcl_register(tcl, "expr", tcl_cmd_expr, 0, NULL);
+#ifndef TCL_DISABLE_PUTS
+  tcl_register(tcl, "puts", tcl_cmd_puts, 2, NULL);
 #endif
 }
 

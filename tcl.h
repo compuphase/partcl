@@ -11,9 +11,17 @@ struct tcl {
   struct tcl_cmd *cmds;
   tcl_value_t *result;
   const char *errorpos;
-  int nestlevel;
+  short errorcode;
+  short nestlevel;
 };
 
+enum {
+  TCLERR_GENERAL, /**< unspecified error */
+  TCLERR_SYNTAX,  /**< syntax error, e.g. unbalanced brackets */
+  TCLERR_MEMORY,  /**< memory allocation error */
+  TCLERR_VARNAME, /**< invalid variable name (too long) */
+  TCLERR_EXPR,    /**< error in expression */
+};
 
 /* =========================================================================
     High level interface
