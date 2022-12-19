@@ -42,10 +42,15 @@ SOFTWARE.
 enum { TERROR, TCMD, TWORD, TPART };
 enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN };
 
+/* Lexer flags & options */
+#define LEX_QUOTE   0x01  /* inside a double-quote section */
+#define LEX_VAR     0x02  /* special mode for parsing variable names */
+#define LEX_NO_CMT  0x04  /* don't allow comment here (so comment is allowed when this is not set) */
+
 static bool tcl_is_operator(char c) {
   return (c == '|' || c == '&' || c == '~' || c == '<' || c == '>' ||
           c == '=' || c == '!' || c == '-' || c == '+' || c == '*' ||
-          c == '/' || c == '%' || c == '(' || c == ')');
+          c == '/' || c == '%' || c == '?' || c == ':' || c == '(' || c == ')');
 }
 static bool tcl_is_special(char c, int q) {
   return (c == '$' || c == '[' || c == ']' || c == '"' || c == '\0' ||
@@ -59,33 +64,46 @@ static bool tcl_is_end(char c) {
 }
 
 static int tcl_next(const char *list, size_t length, const char **from, const char **to,
-                    bool *quote, bool variable) {
+                    unsigned *flags) {
   unsigned int i = 0;
   int depth = 0;
+  bool quote = ((*flags & LEX_QUOTE) != 0);
 
-  DBG("tcl_next(%.*s)+%d+%d|%d\n", length, list, *from - list, *to - list, *quote);
+  DBG("tcl_next(%.*s)+%d+%d|%x\n", length, list, *from - list, *to - list, *flags);
 
   /* Skip leading spaces if not quoted */
-  for (; !*quote && length > 0 && tcl_is_space(*list); list++, length--)
+  for (; !quote && length > 0 && tcl_is_space(*list); list++, length--)
     {}
+  /* Skip comment (then skip leading spaces again */
+  if (*list == '#' && !(*flags & LEX_NO_CMT)) {
+    assert(!quote); /* this flag cannot be set, if the "no-comment" flag is set */
+    for (; length > 0 && *list != '\n' && *list != '\r'; list++, length--)
+      {}
+    for (; length > 0 && tcl_is_space(*list); list++, length--)
+      {}
+  }
+  *flags |= LEX_NO_CMT;
+
   *from = list;
   /* Terminate command if not quoted */
-  if (!*quote && length > 0 && tcl_is_end(*list)) {
+  if (!quote && length > 0 && tcl_is_end(*list)) {
     *to = list + 1;
+    *flags &= ~LEX_NO_CMT;  /* allow comment at this point */
     return TCMD;
   }
+
   if (*list == '$') { /* Variable token, must not start with a space or quote */
-    if (tcl_is_space(list[1]) || list[1] == '"') {
+    if (tcl_is_space(list[1]) || list[1] == '"' || (*flags & LEX_VAR)) {
       return TERROR;
     }
-    int mode = *quote;
-    *quote = 0;
-    int r = tcl_next(list + 1, length - 1, to, to, quote, true);
-    *quote = mode;
-    return ((r == TWORD && *quote) ? TPART : r);
+    unsigned saved_flags = *flags;
+    *flags = (*flags & ~LEX_QUOTE) | LEX_VAR; /* quoting is off, variable name parsing is on */
+    int r = tcl_next(list + 1, length - 1, to, to, flags);
+    *flags = saved_flags;
+    return ((r == TWORD && quote) ? TPART : r);
   }
 
-  if (*list == '[' || (!*quote && *list == '{')) {
+  if (*list == '[' || (!quote && *list == '{')) {
     /* Interleaving pairs are not welcome, but it simplifies the code */
     char open = *list;
     char close = (open == '[' ? ']' : '}');
@@ -105,9 +123,10 @@ static int tcl_next(const char *list, size_t length, const char **from, const ch
       }
     }
   } else if (*list == '"') {
-    *quote = !*quote;
+    *flags ^= LEX_QUOTE;                  /* toggle flag */
+    quote = ((*flags & LEX_QUOTE) != 0);  /* update local variable to match */
     *from = *to = list + 1;
-    if (*quote) {
+    if (quote) {
       return TPART;
     }
     if (length < 2 || (!tcl_is_space(list[1]) && !tcl_is_end(list[1]))) {
@@ -123,10 +142,11 @@ static int tcl_next(const char *list, size_t length, const char **from, const ch
       return TERROR;
     }
   } else {
-    while (i < length &&                              /* run until string completed... */
-           (*quote || !tcl_is_space(list[i])) &&      /* ... and no whitespace (unless quoted) ... */
-           !(variable && tcl_is_operator(list[i])) && /* ... and no operator in variable mode ... */
-           !tcl_is_special(list[i], *quote)) {        /* ... and no special characters (where "special" depends on quote status) */
+    bool isvar = ((*flags & LEX_VAR) != 0);
+    while (i < length &&                           /* run until string completed... */
+           (quote || !tcl_is_space(list[i])) &&    /* ... and no whitespace (unless quoted) ... */
+           !(isvar && tcl_is_operator(list[i])) && /* ... and no operator in variable mode ... */
+           !tcl_is_special(list[i], quote)) {      /* ... and no special characters (where "special" depends on quote status) */
       i++;
     }
   }
@@ -134,7 +154,7 @@ static int tcl_next(const char *list, size_t length, const char **from, const ch
   if (i > length || (i == length && depth)) {
     return TERROR;
   }
-  if (*quote) {
+  if (quote) {
     return TPART;
   }
   return (tcl_is_space(list[i]) || tcl_is_end(list[i])) ? TWORD : TPART;
@@ -146,7 +166,7 @@ struct tcl_parser {
   const char *to;
   const char *start;
   const char *end;
-  bool quote;
+  unsigned flags;
   int token;
 };
 static struct tcl_parser init_tcl_parser(const char *start, const char *end, int token) {
@@ -161,7 +181,7 @@ static struct tcl_parser init_tcl_parser(const char *start, const char *end, int
   for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR);        \
        p.start < p.end &&                                                      \
        (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,         \
-                             &p.quote, false)) != TERROR) ||                   \
+                             &p.flags)) != TERROR) ||                          \
         (skiperr));                                                            \
        p.start = p.to)
 
@@ -296,22 +316,23 @@ tcl_value_t *tcl_list_at(tcl_value_t *v, int index) {
 
 tcl_value_t *tcl_list_append(tcl_value_t *v, tcl_value_t *tail) {
   if (tcl_length(v) > 0) {
+    assert(!tcl_binary(v, tcl_length(v)));
     v = tcl_append(v, tcl_value(" ", 1, false));
   }
   if (tcl_length(tail) > 0) {
-    int q = 0;
+    bool quote = false;
     const char *p;
     for (p = tcl_string(tail); *p; p++) {
       if (tcl_is_space(*p) || tcl_is_special(*p, 0)) {
-        q = 1;
+        quote = true;
         break;
       }
     }
-    if (q) {
+    if (quote) {
       v = tcl_append(v, tcl_value("{", 1, false));
     }
     v = tcl_append(v, tcl_dup(tail));
-    if (q) {
+    if (quote) {
       v = tcl_append(v, tcl_value("}", 1, false));
     }
   } else {
@@ -487,13 +508,13 @@ int tcl_eval(struct tcl *tcl, const char *s, size_t len) {
       cur = tcl_append(cur, part);
       break;
     case TCMD:
-      if (tcl_list_length(list) == 0) {
-        result = tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
-      } else {
+      if (tcl_list_length(list) > 0) {
         result = tcl_exec_cmd(tcl, list);
+        tcl_list_free(list);
+        list = tcl_list_alloc();
+      } else {
+        result = FNORMAL;
       }
-      tcl_list_free(list);
-      list = tcl_list_alloc();
       break;
     }
     if (result == FERROR) {
@@ -548,7 +569,6 @@ static int tcl_cmd_puts(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   tcl_value_t *text = tcl_list_at(args, 1);
   puts(tcl_string(text));
-  putchar('\n');
   return tcl_result(tcl, FNORMAL, text);
 }
 #endif
