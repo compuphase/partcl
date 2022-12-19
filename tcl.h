@@ -38,9 +38,19 @@ void tcl_destroy(struct tcl *tcl);
  *          (and may be assumed "success").
  *
  *  \note On completion (of a successful run), the output of the script is
- *        stored in the "result" field of the "tcl" context.
+ *        stored in the "result" field of the "tcl" context. You can read this
+ *        value with `tcl_string`.
  */
 int tcl_eval(struct tcl *tcl, const char *script, size_t length);
+
+/** tcl_errorpos() returns the (approximate) line & column number of the
+ *  error.
+ *  \param tcl      The interpreter context.
+ *  \param script   The buffer with the script.
+ *  \param line     [out] The line number (1-based).
+ *  \param column   [out] The column number (1-based).
+ */
+void tcl_errorpos(struct tcl *tcl, const char *script, int *line, int *column);
 
 
 /* =========================================================================

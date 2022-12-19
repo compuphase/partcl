@@ -685,7 +685,6 @@ static int tcl_cmd_while(struct tcl *tcl, tcl_value_t *args, void *arg) {
 /* ------------------------------------------------------- */
 /* ------------------------------------------------------- */
 
-#ifndef TCL_DISABLE_MATH
 enum {
   TOK_END_EXPR = 0,
   TOK_NUMBER = 256,
@@ -1073,7 +1072,6 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
 
   return tcl_result(tcl, (err == eNONE) ? FNORMAL : FERROR, tcl_value(p, strlen(p), false));
 }
-#endif  /* TCL_DISABLE_MATH */
 
 /* ------------------------------------------------------- */
 /* ------------------------------------------------------- */
@@ -1082,6 +1080,7 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
 /* ------------------------------------------------------- */
 
 void tcl_init(struct tcl *tcl) {
+  assert(tcl);
   memset(tcl, 0, sizeof(struct tcl));
   tcl->env = tcl_env_alloc(NULL);
   tcl->result = tcl_value("", 0, false);
@@ -1102,6 +1101,7 @@ void tcl_init(struct tcl *tcl) {
 }
 
 void tcl_destroy(struct tcl *tcl) {
+  assert(tcl);
   while (tcl->env) {
     tcl->env = tcl_env_free(tcl->env);
   }
@@ -1114,6 +1114,29 @@ void tcl_destroy(struct tcl *tcl) {
   }
   tcl_free(tcl->result);
   memset(tcl, 0, sizeof(struct tcl));
+}
+
+void tcl_errorpos(struct tcl *tcl, const char *script, int *line, int *column) {
+  assert(tcl);
+  assert(script);
+  assert(line);
+  assert(column);
+  *line = 1;
+  const char *linebase = script;
+  while (script < tcl->errorpos) {
+    if (*script == '\r' || *script == '\n') {
+      *line += 1;
+      linebase = script + 1;
+      if (*script == '\r' && *(script + 1) == '\n') {
+        script++; /* handle \r\n as a single line feed */
+      }
+    }
+    script++;
+  }
+  *column = tcl->errorpos - linebase;
+  if (*column == 0) {
+    *column = 1;
+  }
 }
 
 const char *tcl_cobs_encode(const char *bindata, size_t *length) {
