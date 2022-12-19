@@ -72,14 +72,13 @@ lose their special meaning and become regular printable characters.
 ParTcl lexer is implemented in one function:
 
 ```
-int tcl_next(const char *list, size_t length, const char **from, const char **to, bool *quote, bool variable);
+int tcl_next(const char *list, size_t length, const char **from, const char **to, unsigned *flags);
 ```
 
 `tcl_next` function finds the next token in the string `list`. Paramters `from` and `to` are
-set to point to the token start/end. Parameter `quote` denotes the quoting mode and is
-changed if `"` is met. Parameter `variable` is for special handling of (unquoted) variable
-names and is set to `true` when `tcl_next` calls itself recursively. When calling the lexer
-from your own code, `variable` should always be set to `false`.
+set to point to the token start/end. Parameter `flags` holds flags for the quoting mode
+(toggled if `"` is met), and flags whether a comment is allowed (and must be gobbled), plus
+other(s). When calling the lexer from your own code, `flags` should be initialized to `0`.
 
 A special macro `tcl_each(s, len, skip_error)` can used to iterate over all the
 tokens in the string. If `skip_error` is false - loop ends when string ends,
@@ -213,8 +212,7 @@ current interpreter commands. That's how user-defined commands are built.
 "expr" - `tcl_cmd_expr` interprets the infix expression that follows. This is
 and integer-only expression parser, but supporting most of the Tcl operator set
 (`in` and `ni` are currently missing), with the same precedence levels as the
-official Tcl. The expression parser takes nearly half the size of ParTcl, and
-thus it can be disabled to save space (`#define TCL_DISABLE_MATH`).
+official Tcl.
 
 ## Building and testing
 
