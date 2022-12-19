@@ -26,11 +26,15 @@ Built-in commands:
 
 ```c
 struct tcl tcl;
-const char *s = "set x 4; puts [expr 2 + $x * 10]";
+const char *script = "set x 4; puts [expr 2 + $x * 10]";
 
 tcl_init(&tcl);
-if (tcl_eval(&tcl, s, strlen(s)) != FERROR) {
-    printf("%.*s\n", tcl_length(tcl.result), tcl_string(tcl.result));
+if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
+    printf("Result: %.*s\n", tcl_length(tcl.result), tcl_string(tcl.result));
+} else {
+    int line, column;
+    tcl_errorpos(&tcl, script, &line, &column);
+    printf("Error near line %d, column %d\n", line, column);
 }
 tcl_destroy(&tcl);
 ```
