@@ -423,18 +423,22 @@ tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail) {
 /* ----------------------------- */
 /* ----------------------------- */
 
+static int tcl_error_result(struct tcl *tcl, int flow);
+
 struct tcl_cmd {
-  tcl_value_t *name;  /* function name */
-  int arity;          /* number of parameters (including function name); 0 = variable */
-  tcl_cmd_fn_t fn;    /* function pointer */
-  void *user;         /* user value, used for the code block for Tcl procs */
-  const char *declpos;/* position of declaration (Tcl procs) */
+  tcl_value_t *name;  /**< function name */
+  int arity;          /**< number of parameters (including function name); 0 = variable */
+  tcl_cmd_fn_t fn;    /**< function pointer */
+  void *user;         /**< user value, used for the code block for Tcl procs */
+  const char *declpos;/**< position of declaration (Tcl procs) */
   struct tcl_cmd *next;
 };
 
 struct tcl_var {
   tcl_value_t *name;
   tcl_value_t *value;
+  int elements;       /**< for an array, the number of "values" allocated */
+  bool global;        /**< this is an alias for a global variable */
   struct tcl_var *next;
 };
 
@@ -452,10 +456,13 @@ static struct tcl_env *tcl_env_alloc(struct tcl_env *parent) {
 
 static struct tcl_var *tcl_env_var(struct tcl_env *env, tcl_value_t *name) {
   struct tcl_var *var = malloc(sizeof(struct tcl_var));
-  var->name = tcl_dup(name);
-  var->next = env->vars;
-  var->value = tcl_value("", 0, false);
-  env->vars = var;
+  if (var) {
+    memset(var, 0, sizeof(struct tcl_var));
+    var->name = tcl_dup(name);
+    var->next = env->vars;
+    var->value = tcl_value("", 0, false);
+    env->vars = var;
+  }
   return var;
 }
 
@@ -472,15 +479,30 @@ static struct tcl_env *tcl_env_free(struct tcl_env *env) {
   return parent;
 }
 
-tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
-  DBG("var(%s := %.*s)\n", tcl_string(name), tcl_length(value), tcl_string(value));
+static struct tcl_var *tcl_findvar(struct tcl_env *env, tcl_value_t *name) {
   struct tcl_var *var;
-  for (var = tcl->env->vars; var != NULL; var = var->next) {
+  for (var = env->vars; var != NULL; var = var->next) {
     if (strcmp(tcl_string(var->name), tcl_string(name)) == 0) {
-      break;
+      return var;
     }
   }
-  if (var == NULL) {
+  return NULL;
+}
+
+tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
+  DBG("var(%s := %.*s)\n", tcl_string(name), tcl_length(value), tcl_string(value));
+  struct tcl_var *var = tcl_findvar(tcl->env, name);
+  if (var && var->global) { /* found local alias of a global variable; find the global */
+    struct tcl_env *global_env = tcl->env;
+    while (global_env->parent) {
+      global_env = global_env->parent;
+    }
+    var = tcl_findvar(global_env, name);
+  }
+  if (!var) {
+    if (!value) { /* value being read before being set */
+      tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARUNKNOWN));
+    }
     var = tcl_env_var(tcl->env, name);
   }
   if (value != NULL) {
@@ -492,7 +514,7 @@ tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
 }
 
 static void tcl_markposition(struct tcl *tcl, const char *pos) {
-  if (!tcl->env->parent && tcl->nestlevel == 1) {
+  if (!tcl->env->parent && tcl->nestlevel == 1 && tcl->errorcode == 0) {
     tcl->errorpos = pos;
   }
 }
@@ -614,7 +636,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
   }
   tcl_list_free(list);
   if (--tcl->nestlevel == 0) {
-    result = FLOW(result);
+    result = (tcl->errorcode > 0) ? FERROR : FLOW(result);
   }
   return result;
 }
@@ -657,6 +679,39 @@ static int tcl_cmd_set(struct tcl *tcl, tcl_value_t *args, void *arg) {
   return r;
 }
 
+static int tcl_cmd_global(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  if (!tcl_expect_args_ok(args, 2, 0)) {
+    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  struct tcl_env *global_env = tcl->env;
+  while (global_env->parent) {
+    global_env = global_env->parent;
+  }
+  int r = FNORMAL;
+  int n = tcl_list_count(args);
+  for (int i = 1; i < n; i++) {
+    tcl_value_t* name = tcl_list_at(args, i);
+    assert(name);
+    struct tcl_var *var;
+    if ((var = tcl_findvar(tcl->env, name)) != NULL) {
+      /* name exists locally, cannot create an alias with the same name */
+      r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARNAME));
+    } else if (tcl_findvar(global_env, name) == NULL) {
+      /* name not known as a global */
+      r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARUNKNOWN));
+    } else {
+      /* make local, find it back, mark it as an alias for a global */
+      tcl_var(tcl, name, tcl_value("", 0, false));  /* make local */
+      if ((var = tcl_findvar(tcl->env, name)) != NULL) {
+        var->global = true;
+      }
+    }
+    tcl_free(name);
+  }
+  return r;
+}
+
 static int tcl_cmd_subst(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   tcl_value_t *s = tcl_list_at(args, 1);
@@ -678,22 +733,43 @@ static int tcl_cmd_scan(struct tcl *tcl, tcl_value_t *args, void *arg) {
   const char *fptr = tcl_string(format);
   while (*fptr) {
     if (*fptr == '%') {
+      fptr++; /* skip '%' */
+      char buf[32] = "";
+      if (isdigit(*fptr)) {
+        int w = (int)strtol(fptr, (char**)&fptr, 10);
+        if (w > 0 && w < sizeof(buf) - 1) {
+          strncpy(buf, sptr, w);
+          buf[w] = '\0';
+          sptr += w;
+        }
+      }
+      int radix = -1;
       int v = 0;
-      switch (*(fptr + 1)) {
+      switch (*fptr++) {
       case 'c':
-        v = (int)*sptr++;
+        if (buf[0]) {
+          v = (int)buf[0];
+        } else {
+          v = (int)*sptr++;
+        }
         break;
       case 'd':
-        v = (int)strtol(sptr, (char**)&sptr, 10);
+        radix = 10;
         break;
       case 'i':
-        v = (int)strtol(sptr, (char**)&sptr, 0);
+        radix = 0;
         break;
       case 'x':
-        v = (int)strtol(sptr, (char**)&sptr, 16);
+        radix = 16;
         break;
       }
-      fptr += 2;
+      if (radix >= 0) {
+        if (buf[0]) {
+          v = (int)strtol(buf, NULL, radix);
+        } else {
+          v = (int)strtol(sptr, (char**)&sptr, radix);
+        }
+      }
       match++;
       tcl_value_t *var = tcl_list_at(args, match + 2);
       if (var) {
@@ -1333,6 +1409,7 @@ void tcl_init(struct tcl *tcl) {
   tcl->env = tcl_env_alloc(NULL);
   tcl->result = tcl_value("", 0, false);
   tcl_register(tcl, "set", tcl_cmd_set, 0, NULL);
+  tcl_register(tcl, "global", tcl_cmd_global, 0, NULL);
   tcl_register(tcl, "subst", tcl_cmd_subst, 2, NULL);
   tcl_register(tcl, "proc", tcl_cmd_proc, 4, NULL);
   tcl_register(tcl, "if", tcl_cmd_if, 0, NULL);

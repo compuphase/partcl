@@ -56,9 +56,10 @@ enum {
   TCLERR_GENERAL,     /**< unspecified error */
   TCLERR_SYNTAX,      /**< syntax error, e.g. unbalanced brackets */
   TCLERR_MEMORY,      /**< memory allocation error */
-  TCLERR_VARNAME,     /**< invalid variable name (e.g. too long) */
   TCLERR_EXPR,        /**< error in expression */
   TCLERR_CMDUNKNOWN,  /**< unknown command (mismatch in name or arity) */
+  TCLERR_VARUNKNOWN,  /**< unknown variable name */
+  TCLERR_VARNAME,     /**< invalid variable name (e.g. too long) */
   TCLERR_PARAM,       /**< incorrect (or missing) parameter to a command */
 };
 
