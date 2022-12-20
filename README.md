@@ -14,6 +14,7 @@ Built-in commands:
 
 * `subst arg`
 * `set var ?val?`
+* `global var ?var? ...`
 * `expr` (with some limitations, see below)
 * `incr`
 * `scan` (very limited)
@@ -198,32 +199,21 @@ function pointer that actually implements the command.
 
 ## Builtin commands
 
-"set" - `tcl_cmd_set`, assigns value to the variable (if any) and returns the
-current variable value.
-
-"subst" - `tcl_cmd_subst`, does command substitution in the argument string.
-
-"puts" - `tcl_cmd_puts`, prints argument to the stdout, followed by a newline.
-This command can be disabled using `#define TCL_DISABLE_PUTS`, which is handy
-for embedded systems that don't have "stdout".
-
-"proc" - `tcl_cmd_proc`, creates a new command appending it to the list of
-current interpreter commands. That's how user-defined commands are built.
-
-"if" - `tcl_cmd_if`, does a simple `if {cond} {then} {cond2} {then2} {else}`.
-
-"while" - `tcl_cmd_while`, runs a while loop `while {cond} {body}`. One may use
-"break", "continue" or "return" inside the loop to contol the flow.
-
-"expr" - `tcl_cmd_expr` interprets the infix expression that follows. This is
-and integer-only expression parser, but supporting most of the Tcl operator set, 
-with the same precedence levels as standard Tcl. Missing are: the conditional 
-operator (`? :`), list operators `in` and `ni`, and functions.
-
-"incr" - `tcl_cmd_incr` increments or decrements a variable.
-
-"scan" - `tcl_cmd_scan` parses a string and stores extracted values into variables.
-This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders.
+|name   | Summary |
+| ----- | ------- |
+| break | Aborts a loop, jumps to the first instruction following the loop. |
+| continue | Skips the remainder of the loop body, jumps back to the condition of the loop. |
+|expr   | Interprets the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
+|global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
+| if    | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
+| incr  | Increments or decrements a variable. |
+| proc  | Creates a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
+| puts  | Prints argument to the stdout, followed by a newline. This command can be disabled using `#define TCL_DISABLE_PUTS`, which is handy for embedded systems that don't have "stdout". |
+| return | Jumps out of the current command (`proc`), with an optional explicit return value. |
+|scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
+| set   | Assigns value to the variable (if any) and returns the current variable value. |
+| subst | Does command substitution in the argument string. |
+| while | Runs a while loop `while {cond} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 
 ## Building and testing
 
