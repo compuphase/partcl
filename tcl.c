@@ -3,6 +3,9 @@ The MIT License (MIT)
 
 Copyright (c) 2016 Serge Zaitsev
 
+Nota Bene: this is a fork of the original version by Thiadmer Riemersma, with
+many changes.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -666,6 +669,26 @@ static int tcl_cmd_scan(struct tcl *tcl, tcl_value_t *args, void *arg) {
   return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
 }
 
+static int tcl_cmd_incr(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  if (!tcl_expect_args_ok(args, 2, 3)) {
+    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  int val = 1;
+  if (tcl_list_length(args) == 3) {
+    tcl_value_t *incr = tcl_list_at(args, 2);
+    val = tcl_int(incr);
+    tcl_free(incr);
+  }
+  tcl_value_t *name = tcl_list_at(args, 1);
+  assert(name);
+  char buf[64];
+  char *p = tcl_int2string(buf, sizeof buf, tcl_int(tcl_var(tcl, name, NULL)) + val);
+  tcl_var(tcl, name, tcl_value(p, strlen(p), false));
+  tcl_free(name);
+  return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
+}
+
 #ifndef TCL_DISABLE_PUTS
 static int tcl_cmd_puts(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
@@ -1235,6 +1258,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "break", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "expr", tcl_cmd_expr, 0, NULL);
+  tcl_register(tcl, "incr", tcl_cmd_incr, 0, NULL);
   tcl_register(tcl, "scan", tcl_cmd_scan, 0, NULL);
 #ifndef TCL_DISABLE_PUTS
   tcl_register(tcl, "puts", tcl_cmd_puts, 2, NULL);
