@@ -125,8 +125,22 @@ tcl_value_t *tcl_value(const char *data, size_t len, bool binary);
  */
 void tcl_free(tcl_value_t *v);
 
-int tcl_list_length(tcl_value_t *v);
-tcl_value_t *tcl_list_at(tcl_value_t *v, int index);
+/** tcl_list_count() returns the number of elements in a list.
+ *  \param list       The list.
+ *
+ *  \return The number of elements in the list.
+ */
+int tcl_list_count(tcl_value_t *list);
+
+/** tcl_list_at() retrieves an element from the list.
+ *  \param list       The list.
+ *  \param index      The zero-based index of the element to retrieve.
+ *
+ *  \return The selected element, or NULL if parameter "index" is out of range.
+ *
+ *  \note The returned element is a copy, which must be freed with tcl_free().
+ */
+tcl_value_t *tcl_list_at(tcl_value_t *list, int index);
 
 
 /* =========================================================================
