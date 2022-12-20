@@ -15,13 +15,6 @@ struct tcl {
   short nestlevel;
 };
 
-enum {
-  TCLERR_GENERAL, /**< unspecified error */
-  TCLERR_SYNTAX,  /**< syntax error, e.g. unbalanced brackets */
-  TCLERR_MEMORY,  /**< memory allocation error */
-  TCLERR_VARNAME, /**< invalid variable name (too long) */
-  TCLERR_EXPR,    /**< error in expression */
-};
 
 /* =========================================================================
     High level interface
@@ -39,7 +32,7 @@ void tcl_destroy(struct tcl *tcl);
 
 /** tcl_eval() runs a script stored in a memory buffer.
  *  \param tcl      The interpreter context.
- *  \param script   The buffer with the script.
+ *  \param string   The buffer with the script (or part of a script).
  *  \param length   The length of the buffer.
  *
  *  \return 0 on error, 1 on success; other non-zero codes are used internally
@@ -49,7 +42,7 @@ void tcl_destroy(struct tcl *tcl);
  *        stored in the "result" field of the "tcl" context. You can read this
  *        value with `tcl_string`.
  */
-int tcl_eval(struct tcl *tcl, const char *script, size_t length);
+int tcl_eval(struct tcl *tcl, const char *string, size_t length);
 
 /** tcl_errorpos() returns the (approximate) line & column number of the
  *  error.
@@ -59,11 +52,34 @@ int tcl_eval(struct tcl *tcl, const char *script, size_t length);
  *  \param column   [out] The column number (1-based).
  */
 void tcl_errorpos(struct tcl *tcl, const char *script, int *line, int *column);
+enum {
+  TCLERR_GENERAL,     /**< unspecified error */
+  TCLERR_SYNTAX,      /**< syntax error, e.g. unbalanced brackets */
+  TCLERR_MEMORY,      /**< memory allocation error */
+  TCLERR_VARNAME,     /**< invalid variable name (e.g. too long) */
+  TCLERR_EXPR,        /**< error in expression */
+  TCLERR_CMDUNKNOWN,  /**< unknown command (mismatch in name or arity) */
+  TCLERR_PARAM,       /**< incorrect (or missing) parameter to a command */
+};
 
 
 /* =========================================================================
     Values & lists
    ========================================================================= */
+
+/** tcl_type() returns the type of a value. Note that integers can also be
+ *  accessed as strings in Tcl.
+ *  \param v        The value.
+ *
+ *  \return The detected value.
+ */
+int tcl_type(tcl_value_t *v);
+enum {
+  TCLTYPE_EMPTY,
+  TCLTYPE_STRING,
+  TCLTYPE_INT,
+  TCLTYPE_BLOB,
+};
 
 /** tcl_string() returns a pointer to the start of the contents of a value. If
  ** the value is binary blob, it returns a pointer to the start of the raw data.
