@@ -14,7 +14,9 @@ Built-in commands:
 
 * `subst arg`
 * `set var ?val?`
-* `expr`
+* `expr` (with some limitations, see below)
+* `incr`
+* `scan` (very limited)
 * `while cond loop`
 * `if cond branch ?cond? ?branch? ?other?`
 * `proc name args body`
@@ -214,9 +216,14 @@ current interpreter commands. That's how user-defined commands are built.
 "break", "continue" or "return" inside the loop to contol the flow.
 
 "expr" - `tcl_cmd_expr` interprets the infix expression that follows. This is
-and integer-only expression parser, but supporting most of the Tcl operator set
-(`in` and `ni` are currently missing), with the same precedence levels as the
-official Tcl.
+and integer-only expression parser, but supporting most of the Tcl operator set, 
+with the same precedence levels as standard Tcl. Missing are: the conditional 
+operator (`? :`), list operators `in` and `ni`, and functions.
+
+"incr" - `tcl_cmd_incr` increments or decrements a variable.
+
+"scan" - `tcl_cmd_scan` parses a string and stores extracted values into variables.
+This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders.
 
 ## Building and testing
 
