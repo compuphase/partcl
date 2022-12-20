@@ -47,6 +47,7 @@ enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN };
 
 #define MARKFLOW(f, e)  ((f) | ((e) << 8))
 #define FLOW(r)         ((r) & 0xff)
+#define FLOW_NORMAL(r)  (((r) & 0xff) == FNORMAL)
 
 /* Lexer flags & options */
 #define LEX_QUOTE   0x01  /* inside a double-quote section */
@@ -631,7 +632,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
   }
   /* when arrived at the end of the buffer, if the list is non-empty, run that
      last command */
-  if (FLOW(result) == FNORMAL && tcl_list_count(list) > 0) {
+  if (FLOW_NORMAL(result) && tcl_list_count(list) > 0) {
     result = tcl_exec_cmd(tcl, list);
   }
   tcl_list_free(list);
@@ -874,7 +875,7 @@ static int tcl_cmd_if(struct tcl *tcl, tcl_value_t *args, void *arg) {
     }
     r = tcl_eval(tcl, tcl_string(cond), tcl_length(cond) + 1);
     cond = tcl_list_free(cond);
-    if (FLOW(r) != FNORMAL) {
+    if (!FLOW_NORMAL(r)) {
       tcl_free(branch);   /* error in condition expression, abort */
       break;
     } else if (!branch) {
@@ -920,6 +921,75 @@ static int tcl_cmd_if(struct tcl *tcl, tcl_value_t *args, void *arg) {
   return FLOW(r);
 }
 
+static int tcl_cmd_while(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  assert(tcl_list_count(args) == 3);
+  tcl_value_t *cond = tcl_make_condition_list(tcl_list_at(args, 1));
+  tcl_value_t *body = tcl_list_at(args, 2);
+  int r = FNORMAL;
+  for (;;) {
+    r = tcl_eval(tcl, tcl_string(cond), tcl_length(cond) + 1);
+    if (!FLOW_NORMAL(r)) {
+      break;
+    }
+    if (!tcl_int(tcl->result)) {
+      r = FNORMAL;
+      break;
+    }
+    r = tcl_eval(tcl, tcl_string(body), tcl_length(body) + 1);
+    if (FLOW(r) != FAGAIN && FLOW(r) != FNORMAL) {
+      assert(FLOW(r) == FBREAK || FLOW(r) == FRETURN || FLOW(r) == FERROR);
+      if (FLOW(r) == FBREAK) {
+        r = FNORMAL;
+      }
+      break;
+    }
+  }
+  tcl_list_free(cond);
+  tcl_free(body);
+  return FLOW(r);
+}
+
+static int tcl_cmd_for(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  assert(tcl_list_count(args) == 5);
+  tcl_value_t *setup = tcl_list_at(args, 1);
+  int r = tcl_eval(tcl, tcl_string(setup), tcl_length(setup) + 1);
+  tcl_free(setup);
+  if (!FLOW_NORMAL(r)) {
+    return FLOW(r);
+  }
+  tcl_value_t* cond = tcl_make_condition_list(tcl_list_at(args, 2));
+  tcl_value_t *post = tcl_list_at(args, 3);
+  tcl_value_t *body = tcl_list_at(args, 4);
+  for (;;) {
+    r = tcl_eval(tcl, tcl_string(cond), tcl_length(cond) + 1);
+    if (!FLOW_NORMAL(r)) {
+      break;
+    }
+    if (!tcl_int(tcl->result)) {
+      r = FNORMAL;  /* condition failed, drop out of loop */
+      break;
+    }
+    r = tcl_eval(tcl, tcl_string(body), tcl_length(body) + 1);
+    if (FLOW(r) != FAGAIN && FLOW(r) != FNORMAL) {
+      assert(FLOW(r) == FBREAK || FLOW(r) == FRETURN || FLOW(r) == FERROR);
+      if (FLOW(r) == FBREAK) {
+        r = FNORMAL;
+      }
+      break;
+    }
+    r = tcl_eval(tcl, tcl_string(post), tcl_length(post) + 1);
+    if (!FLOW_NORMAL(r)) {
+      break;
+    }
+  }
+  tcl_list_free(cond);
+  tcl_free(post);
+  tcl_free(body);
+  return FLOW(r);
+}
+
 static int tcl_cmd_flow(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   int r = FERROR;
@@ -934,32 +1004,6 @@ static int tcl_cmd_flow(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
   tcl_free(flowval);
   return r;
-}
-
-static int tcl_cmd_while(struct tcl *tcl, tcl_value_t *args, void *arg) {
-  (void)arg;
-  tcl_value_t *cond = tcl_make_condition_list(tcl_list_at(args, 1));
-  tcl_value_t *body = tcl_list_at(args, 2);
-  for (;;) {
-    int r = tcl_eval(tcl, tcl_string(cond), tcl_length(cond) + 1);
-    if (FLOW(r) != FNORMAL) {
-      tcl_list_free(cond);
-      tcl_free(body);
-      return FLOW(r);
-    }
-    if (!tcl_int(tcl->result)) {
-      tcl_list_free(cond);
-      tcl_free(body);
-      return FNORMAL;
-    }
-    r = tcl_eval(tcl, tcl_string(body), tcl_length(body) + 1);
-    if (FLOW(r) != FAGAIN && FLOW(r) != FNORMAL) {
-      assert(FLOW(r) == FBREAK || FLOW(r) == FRETURN || FLOW(r) == FERROR);
-      tcl_list_free(cond);
-      tcl_free(body);
-      return FLOW(r) == FBREAK ? FNORMAL : FLOW(r);
-    }
-  }
 }
 
 /* ------------------------------------------------------- */
@@ -1382,7 +1426,7 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   /* parse expression */
   char buf[64] = "";
   char *retptr = buf;
-  if (r == FNORMAL) {
+  if (FLOW_NORMAL(r)) {
     long result;
     int err = tcl_expression(tcl, expression, &result);
     if (err == eNONE) {
@@ -1408,18 +1452,19 @@ void tcl_init(struct tcl *tcl) {
   memset(tcl, 0, sizeof(struct tcl));
   tcl->env = tcl_env_alloc(NULL);
   tcl->result = tcl_value("", 0, false);
-  tcl_register(tcl, "set", tcl_cmd_set, 0, NULL);
-  tcl_register(tcl, "global", tcl_cmd_global, 0, NULL);
-  tcl_register(tcl, "subst", tcl_cmd_subst, 2, NULL);
-  tcl_register(tcl, "proc", tcl_cmd_proc, 4, NULL);
-  tcl_register(tcl, "if", tcl_cmd_if, 0, NULL);
-  tcl_register(tcl, "while", tcl_cmd_while, 3, NULL);
-  tcl_register(tcl, "return", tcl_cmd_flow, 0, NULL);
   tcl_register(tcl, "break", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "expr", tcl_cmd_expr, 0, NULL);
+  tcl_register(tcl, "for", tcl_cmd_for, 5, NULL);
+  tcl_register(tcl, "global", tcl_cmd_global, 0, NULL);
+  tcl_register(tcl, "if", tcl_cmd_if, 0, NULL);
   tcl_register(tcl, "incr", tcl_cmd_incr, 0, NULL);
+  tcl_register(tcl, "proc", tcl_cmd_proc, 4, NULL);
+  tcl_register(tcl, "return", tcl_cmd_flow, 0, NULL);
   tcl_register(tcl, "scan", tcl_cmd_scan, 0, NULL);
+  tcl_register(tcl, "set", tcl_cmd_set, 0, NULL);
+  tcl_register(tcl, "subst", tcl_cmd_subst, 2, NULL);
+  tcl_register(tcl, "while", tcl_cmd_while, 3, NULL);
 #ifndef TCL_DISABLE_PUTS
   tcl_register(tcl, "puts", tcl_cmd_puts, 2, NULL);
 #endif
