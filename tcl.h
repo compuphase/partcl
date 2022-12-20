@@ -121,9 +121,12 @@ tcl_value_t *tcl_value(const char *data, size_t len, bool binary);
 /** tcl_free() deallocates a value or a list.
  *  \param v          The value.
  *
- *  \note Lists are implemented as values, so tcl_free() frees lists as well.
+ *  \return This function always returns NULL.
+ *
+ *  \note Lists are implemented as values, but you should use tcl_list_free() to
+ *        deallocate lists.
  */
-void tcl_free(tcl_value_t *v);
+tcl_value_t *tcl_free(tcl_value_t *v);
 
 /** tcl_list_count() returns the number of elements in a list.
  *  \param list       The list.
@@ -141,6 +144,17 @@ int tcl_list_count(tcl_value_t *list);
  *  \note The returned element is a copy, which must be freed with tcl_free().
  */
 tcl_value_t *tcl_list_at(tcl_value_t *list, int index);
+
+/** tcl_list_append() appends an item to the list, and frees the item.
+ *  \param list       The original list.
+ *  \param tail       The item to append.
+ *
+ *  \return The list with the item appended.
+ *
+ *  \note Both the original list and the item that was appended, are
+ *        deallocated (freed).
+ */
+tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail);
 
 
 /* =========================================================================
