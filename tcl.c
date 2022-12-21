@@ -57,10 +57,11 @@ enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN };
 static bool tcl_is_operator(char c) {
   return (c == '|' || c == '&' || c == '~' || c == '<' || c == '>' ||
           c == '=' || c == '!' || c == '-' || c == '+' || c == '*' ||
-          c == '/' || c == '%' || c == '?' || c == ':' || c == '(' || c == ')');
+          c == '/' || c == '%' || c == '?' || c == ':');
 }
-static bool tcl_is_special(char c, bool quote) {
-  return (c == '$' || c == '[' || c == ']' || c == '"' || c == '\0' ||
+static bool tcl_is_special(char c, bool quote, bool isvar) {
+  return (c == '[' || c == ']' || c == '"' || c == '\0' ||
+          (!isvar && c == '$') ||
           (!quote && (c == '{' || c == '}' || c == ';' || c == '\r' || c == '\n')) );
 }
 
@@ -150,10 +151,10 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
     }
   } else {
     bool isvar = ((*flags & LEX_VAR) != 0);
-    while (i < length &&                           /* run until string completed... */
-           (quote || !tcl_is_space(string[i])) &&    /* ... and no whitespace (unless quoted) ... */
-           !(isvar && tcl_is_operator(string[i])) && /* ... and no operator in variable mode ... */
-           !tcl_is_special(string[i], quote)) {      /* ... and no special characters (where "special" depends on quote status) */
+    while (i < length &&                                /* run until string completed... */
+           (quote || !tcl_is_space(string[i])) &&       /* ... and no whitespace (unless quoted) ... */
+           !(isvar && tcl_is_operator(string[i])) &&    /* ... and no operator in variable mode ... */
+           !tcl_is_special(string[i], quote, isvar)) {  /* ... and no special characters (where "special" depends on quote status) */
       i++;
     }
   }
@@ -373,15 +374,16 @@ tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail) {
   if (taillen > 0) {
     if (tcl_binary(tail, taillen)) {
       extrasz += 3;
+      quote = true; /* always quote binary blobs */
     } else {
       for (const char *p = tcl_string(tail); *p && !quote; p++) {
-        if (tcl_is_space(*p) || tcl_is_special(*p, 0)) {
+        if (tcl_is_space(*p) || tcl_is_special(*p, false, false)) {
           quote = true;
         }
       }
     }
   } else {
-    quote = true;
+    quote = true; /* quote, to create an empty element */
   }
   if (quote) {
     extrasz += 2;
@@ -425,6 +427,7 @@ tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail) {
 /* ----------------------------- */
 
 static int tcl_error_result(struct tcl *tcl, int flow);
+static int tcl_var_index(tcl_value_t *name, size_t *baselength);
 
 struct tcl_cmd {
   tcl_value_t *name;  /**< function name */
@@ -437,7 +440,7 @@ struct tcl_cmd {
 
 struct tcl_var {
   tcl_value_t *name;
-  tcl_value_t *value;
+  tcl_value_t **value;/**< array of values */
   int elements;       /**< for an array, the number of "values" allocated */
   bool global;        /**< this is an alias for a global variable */
   struct tcl_var *next;
@@ -459,10 +462,20 @@ static struct tcl_var *tcl_env_var(struct tcl_env *env, tcl_value_t *name) {
   struct tcl_var *var = malloc(sizeof(struct tcl_var));
   if (var) {
     memset(var, 0, sizeof(struct tcl_var));
-    var->name = tcl_dup(name);
-    var->next = env->vars;
-    var->value = tcl_value("", 0, false);
-    env->vars = var;
+    assert(name);
+    size_t namesz;
+    tcl_var_index(name, &namesz);
+    var->name = tcl_value(tcl_string(name), namesz, false);
+    var->elements = 1;
+    var->value = malloc(var->elements * sizeof(tcl_value_t*));
+    if (var->value) {
+      var->value[0] = tcl_value("", 0, false);
+      var->next = env->vars;
+      env->vars = var;
+    } else {
+      free(var);
+      var = NULL;
+    }
   }
   return var;
 }
@@ -473,17 +486,52 @@ static struct tcl_env *tcl_env_free(struct tcl_env *env) {
     struct tcl_var *var = env->vars;
     env->vars = env->vars->next;
     tcl_free(var->name);
-    tcl_free(var->value);
+    assert(var->value);
+    for (int idx = 0; idx < var->elements; idx++) {
+      if (var->value[idx]) {
+        tcl_free(var->value[idx]);
+      }
+    }
+    free(var->value);
     free(var);
   }
   free(env);
   return parent;
 }
 
+static int tcl_var_index(tcl_value_t *name, size_t *baselength) {
+  size_t len = tcl_length(name);
+  const char *base = tcl_string(name);
+  const char *ptr = base + len;
+  int idx = 0;
+  if (ptr > base && *(ptr - 1) == ')') {
+    ptr--;
+    while (ptr > base && isdigit(*(ptr - 1))) {
+      ptr--;
+    }
+    if (ptr > base + 1 && *(ptr - 1) == '(') {
+      idx = (int)strtol(ptr, NULL, 10);
+      if (idx >= 0) {
+        len = ptr - base - 1;
+      }
+    }
+  }
+  if (baselength) {
+    *baselength = len;
+  }
+  return idx;
+}
+
 static struct tcl_var *tcl_findvar(struct tcl_env *env, tcl_value_t *name) {
   struct tcl_var *var;
+  const char *nameptr = tcl_string(name);
+  size_t namesz;
+  tcl_var_index(name, &namesz);
   for (var = env->vars; var != NULL; var = var->next) {
-    if (strcmp(tcl_string(var->name), tcl_string(name)) == 0) {
+    const char *varptr = tcl_string(var->name);
+    size_t varsz;
+    tcl_var_index(var->name, &varsz);
+    if (varsz == namesz && strncmp(varptr, nameptr, varsz) == 0) {
       return var;
     }
   }
@@ -506,12 +554,34 @@ tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
     }
     var = tcl_env_var(tcl->env, name);
   }
-  if (value != NULL) {
-    tcl_free(var->value);
-    var->value = tcl_dup(value);
-    tcl_free(value);
+  int idx = tcl_var_index(name, NULL);
+  if (var->elements <= idx) {
+    size_t newsize = var->elements;
+    while (newsize <= idx) {
+      newsize *= 2;
+    }
+    tcl_value_t** newlist = malloc(newsize * sizeof(tcl_value_t*));
+    if (newlist) {
+      memset(newlist, 0, newsize * sizeof(tcl_value_t*));
+      memcpy(newlist, var->value, var->elements * sizeof(tcl_value_t*));
+      free(var->value);
+      var->value = newlist;
+      var->elements = newsize;
+    } else {
+      tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_MEMORY));
+      idx = 0;  /* sets/returns wrong index, but avoid accessing out of range index */
+    }
   }
-  return var->value;
+  if (value) {
+    if (var->value[idx]) {
+      tcl_free(var->value[idx]);
+    }
+    var->value[idx] = tcl_dup(value);
+    tcl_free(value);
+  } else if (var->value[idx] == NULL) {
+    var->value[idx] = tcl_value("", 0, false);
+  }
+  return var->value[idx];
 }
 
 static void tcl_markposition(struct tcl *tcl, const char *pos) {
@@ -551,6 +621,36 @@ static int tcl_subst(struct tcl *tcl, const char *s, size_t len) {
       return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARNAME));
     }
     tcl_value_t *name = tcl_value(s + 1, len - 1, false);
+    /* check for a variable index (arrays) */
+    const char *start;
+    for (start = tcl_string(name); *start != '\0' && *start != '('; start++)
+      {}
+    if (*start == '(') {
+      start++;
+      bool is_var = false;
+      int depth = 1;
+      const char *end = start;
+      while (*end != '\0') {
+        if (*end == ')') {
+          if (--depth == 0) {
+            break;
+          }
+        } else if (*end == '(') {
+          depth++;
+        } else if (*end == '$' && depth == 1) {
+          is_var = true;
+        }
+        end++;
+      }
+      if (*end == ')' && is_var) {  /* evaluate index, build new name */
+        int baselen = start - tcl_string(name);
+        tcl_subst(tcl, start, end - start);
+        tcl_free(name);
+        name = tcl_value(s + 1, baselen, false);  /* includes opening '(' */
+        name = tcl_append(name, tcl_dup(tcl->result));
+        name = tcl_append(name, tcl_value(")", 1, false));
+      }
+    }
     int r = tcl_result(tcl, FNORMAL, tcl_dup(tcl_var(tcl, name, NULL)));
     tcl_free(name);
     return r;
@@ -1145,14 +1245,24 @@ static int expr_lex(struct expr *expr) {
       expr->pos += 1; /* skip '{' */
     }
     int i = 0;
-    while (i < sizeof(name) - 1 && *expr->pos != close
+    while (i < sizeof(name) - 1 && *expr->pos != close && *expr->pos != '(' && *expr->pos != ')'
            && (quote || !tcl_is_space(*expr->pos))  && !tcl_is_operator(*expr->pos)
-           && !tcl_is_special(*expr->pos, quote)) {
+           && !tcl_is_special(*expr->pos, false, false)) {
       name[i++] = *expr->pos++;
     }
     name[i] = '\0';
     if (quote && *expr->pos == close) {
       expr->pos += 1; /* skip '}' */
+    }
+    if (*expr->pos == '(') {
+      expr_skip(expr, 1);
+      long v = expr_logic_or(expr);
+      if (lex(expr) != ')')
+        expr_error(expr, ePARENTHESES);
+      strcat(name, "(");
+      char buf[64];
+      strcat(name, tcl_int2string(buf, sizeof buf, v));
+      strcat(name, ")");
     }
     expr_skip(expr, 0);          /* erase white space */
     tcl_value_t *varname = tcl_value(name, strlen(name), false);
