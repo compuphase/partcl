@@ -749,7 +749,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
 /* --------------------------------- */
 
 static int tcl_expression(struct tcl *tcl, const char *expression, long *result);  /* forward declaration */
-static char *tcl_int2string(char *buffer, size_t bufsz, long value);
+static char *tcl_int2string(char *buffer, size_t bufsz, int radix, long value);
 
 static bool tcl_expect_args_ok(tcl_value_t *args, int min_args, int max_args) {
   int n = tcl_list_count(args);
@@ -875,7 +875,7 @@ static int tcl_cmd_scan(struct tcl *tcl, tcl_value_t *args, void *arg) {
       tcl_value_t *var = tcl_list_at(args, match + 2);
       if (var) {
         char buf[64];
-        char *p = tcl_int2string(buf, sizeof buf, v);
+        char *p = tcl_int2string(buf, sizeof buf, 10, v);
         tcl_var(tcl, var, tcl_value(p, strlen(p), false));
       }
       tcl_free(var);
@@ -890,8 +890,123 @@ static int tcl_cmd_scan(struct tcl *tcl, tcl_value_t *args, void *arg) {
   tcl_free(format);
 
   char buf[64];
-  char *p = tcl_int2string(buf, sizeof buf, match);
+  char *p = tcl_int2string(buf, sizeof buf, 10, match);
   return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
+}
+
+static int tcl_cmd_format(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  if (!tcl_expect_args_ok(args, 2, 0)) {
+    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  size_t bufsize = 256;
+  char *buffer = malloc(bufsize);
+  if (!buffer) {
+    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_MEMORY));
+  }
+  tcl_value_t* format = tcl_list_at(args, 1);
+  assert(format);
+  const char *fptr = tcl_string(format);
+  size_t buflen = 0;
+  int index = 2;
+  tcl_value_t *argcopy = NULL;
+  while (*fptr) {
+    char field[64] = "";
+    size_t fieldlen = 0;
+    int pad = 0;
+    bool left_justify = false;
+    if (*fptr == '%' && *(fptr + 1) != '%') {
+      fptr++; /* skip '%' */
+      if (*fptr == '-') {
+        left_justify = true;
+        fptr++;
+      }
+      if (isdigit(*fptr)) {
+        bool zeropad = (*fptr == '0');
+        pad = (int)strtol(fptr, (char**)&fptr, 10);
+        if (pad <= 0 || pad > sizeof(field) - 1) {
+          pad = 0;
+        } else {
+          memset(field, zeropad ? '0' : ' ', sizeof(field));
+        }
+      }
+      char ival[32];
+      char *pval;
+      int skip = 0;
+      argcopy = tcl_list_at(args, index++);
+      switch (*fptr) {
+      case 'c':
+        fieldlen = (pad > 1) ? pad : 1;
+        skip = left_justify ? 0 : fieldlen - 1;
+        field[skip] = (char)tcl_int(argcopy);
+        break;
+      case 'd':
+      case 'i':
+      case 'x':
+        pval = tcl_int2string(ival, sizeof(ival), (*fptr == 'x') ? 16 : 10, tcl_int(argcopy));
+        fieldlen = strlen(pval);
+        if (pad > fieldlen) {
+          skip = left_justify ? 0 : pad - fieldlen;
+          fieldlen = pad;
+        }
+        memcpy(field + skip, pval, strlen(pval));
+        break;
+      case 's':
+        fieldlen = tcl_length(argcopy);
+        if (pad > fieldlen) {
+          fieldlen = pad;
+        }
+        break;
+      }
+      if (*fptr != 's' && argcopy) {
+        argcopy = tcl_free(argcopy);
+      }
+    } else {
+      fieldlen = 1;
+      field[0] = *fptr;
+      if (*fptr == '%') {
+        assert(*(fptr + 1) == '%'); /* otherwise, should not have dropped in the else clause */
+        fptr++;
+      }
+    }
+    if (buflen + fieldlen + 1 >= bufsize) {
+      size_t newsize = 2 * bufsize;
+      while (buflen + fieldlen + 1 >= newsize) {
+        newsize *= 2;
+      }
+      char *newbuf = malloc(newsize);
+      if (newbuf) {
+        memcpy(newbuf, buffer, buflen);
+        free(buffer);
+        buffer = newbuf;
+        bufsize = newsize;
+      }
+    }
+    if (buflen + fieldlen + 1 < bufsize) {
+      if (argcopy) {
+        int slen = tcl_length(argcopy);
+        int skip = (pad > slen && !left_justify) ? pad - slen : 0;
+        if (pad > slen) {
+          memset(buffer + buflen, ' ', pad);
+        }
+        memcpy(buffer + buflen + skip, tcl_string(argcopy), slen);
+      } else {
+        memcpy(buffer + buflen, field, fieldlen);
+      }
+      buflen += fieldlen;
+    }
+    if (argcopy) {
+      argcopy = tcl_free(argcopy);
+    }
+    fptr++;
+  }
+  if (buflen + 1 < bufsize) {
+    buffer[buflen] = '\0';
+  }
+  tcl_free(format);
+  int r = tcl_result(tcl, FNORMAL, tcl_value(buffer, buflen, false));
+  free(buffer);
+  return r;
 }
 
 static int tcl_cmd_incr(struct tcl *tcl, tcl_value_t *args, void *arg) {
@@ -908,7 +1023,7 @@ static int tcl_cmd_incr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   tcl_value_t *name = tcl_list_at(args, 1);
   assert(name);
   char buf[64];
-  char *p = tcl_int2string(buf, sizeof buf, tcl_int(tcl_var(tcl, name, NULL)) + val);
+  char *p = tcl_int2string(buf, sizeof buf, 10, tcl_int(tcl_var(tcl, name, NULL)) + val);
   tcl_var(tcl, name, tcl_value(p, strlen(p), false));
   tcl_free(name);
   return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
@@ -1261,7 +1376,7 @@ static int expr_lex(struct expr *expr) {
         expr_error(expr, ePARENTHESES);
       strcat(name, "(");
       char buf[64];
-      strcat(name, tcl_int2string(buf, sizeof buf, v));
+      strcat(name, tcl_int2string(buf, sizeof buf, 10, v));
       strcat(name, ")");
     }
     expr_skip(expr, 0);          /* erase white space */
@@ -1486,19 +1601,29 @@ static int tcl_expression(struct tcl *tcl, const char *expression, long *result)
   return expr.error;
 }
 
-static char *tcl_int2string(char *buffer, size_t bufsz, long value) {
+static char *tcl_int2string(char *buffer, size_t bufsz, int radix, long value) {
+  assert(buffer);
+  assert(radix == 10 || radix == 16);
   char *p = buffer + bufsz - 1;
   *p-- = '\0';
-  bool neg = (value < 0);
-  if (neg) {
-    value = -value;
-  }
-  do {
-    *p-- = '0' + (value % 10);
-    value = value / 10;
-  } while (value > 0);
-  if (neg) {
-    *p-- = '-';
+  if (radix == 16) {
+    do {
+      unsigned char c = (value & 0xf);
+      *p-- = (c < 10) ? '0' + c : 'A' + (c - 10);
+      value = value >> 4;
+    } while (value > 0);
+  } else {
+    bool neg = (value < 0);
+    if (neg) {
+      value = -value;
+    }
+    do {
+      *p-- = '0' + (value % 10);
+      value = value / 10;
+    } while (value > 0);
+    if (neg) {
+      *p-- = '-';
+    }
   }
   return p + 1;
 }
@@ -1521,7 +1646,7 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   long result;
   int err = tcl_expression(tcl, expression, &result);
   if (err == eNONE) {
-    retptr = tcl_int2string(buf, sizeof(buf), result);
+    retptr = tcl_int2string(buf, sizeof(buf), 10, result);
   } else {
     r = MARKFLOW(FERROR, TCLERR_EXPR);
   }
@@ -1546,6 +1671,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "expr", tcl_cmd_expr, 0, NULL);
   tcl_register(tcl, "for", tcl_cmd_for, 5, NULL);
+  tcl_register(tcl, "format", tcl_cmd_format, 0, NULL);
   tcl_register(tcl, "global", tcl_cmd_global, 0, NULL);
   tcl_register(tcl, "if", tcl_cmd_if, 0, NULL);
   tcl_register(tcl, "incr", tcl_cmd_incr, 0, NULL);
