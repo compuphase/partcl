@@ -1506,44 +1506,24 @@ static char *tcl_int2string(char *buffer, size_t bufsz, long value) {
 static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   /* re-construct the expression (it may have been tokenized by the Tcl Lexer) */
+  tcl_value_t *expression;
   int count = tcl_list_count(args);
-  size_t total = 256;
-  char *expression = malloc(total);
-  if (!expression) {
-    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_MEMORY));
-  }
-  int r = FNORMAL;
-  *expression = '\0';
-  for (int idx = 1; idx < count; idx++) {
-    tcl_value_t *tok = tcl_list_at(args, idx);
-    if (strlen(expression) + tcl_length(tok) + 1 >= total) {  /* may need to grow the buffer */
-      size_t newsize = 2 * total;
-      char *newbuf = malloc(newsize);
-      if (newbuf) {
-        strcpy(newbuf, expression);
-        free(expression);
-        expression = newbuf;
-        total = newsize;
-      }
-    }
-    if (strlen(expression) + tcl_length(tok) < total) {
-      if (strlen(expression) > 0)
-        strcat(expression, " ");
-      strcat(expression, tcl_string(tok));
-    }
-    tok = tcl_free(tok);
+  if (count == 2) {
+    expression = tcl_list_at(args, 1);
+  } else {
+    size_t size = tcl_list_size(args);
+    expression = tcl_value(args + 4, size - 4, false);  /* "expr" is 4 characters */
   }
   /* parse expression */
+  int r = FNORMAL;
   char buf[64] = "";
   char *retptr = buf;
-  if (FLOW_NORMAL(r)) {
-    long result;
-    int err = tcl_expression(tcl, expression, &result);
-    if (err == eNONE) {
-      retptr = tcl_int2string(buf, sizeof(buf), result);
-    } else {
-      r = MARKFLOW(FERROR, TCLERR_EXPR);
-    }
+  long result;
+  int err = tcl_expression(tcl, expression, &result);
+  if (err == eNONE) {
+    retptr = tcl_int2string(buf, sizeof(buf), result);
+  } else {
+    r = MARKFLOW(FERROR, TCLERR_EXPR);
   }
   free(expression);
 
