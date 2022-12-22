@@ -58,6 +58,7 @@ enum {
   TCLERR_VARUNKNOWN,  /**< unknown variable name */
   TCLERR_VARNAME,     /**< invalid variable name (e.g. too long) */
   TCLERR_PARAM,       /**< incorrect (or missing) parameter to a command */
+  TCLERR_SCOPE,       /**< scope error (e.g. command is allowed in local scope only) */
 };
 
 
