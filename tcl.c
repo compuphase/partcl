@@ -727,12 +727,11 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
     case TWORD:
       DBG("token %.*s, length=%d, cur=%p (3.1.1)\n", (int)(p.to - p.from),
           p.from, (int)(p.to - p.from), cur);
-      if (cur != NULL) {
-        result = tcl_subst(tcl, p.from, p.to - p.from);
+      result = tcl_subst(tcl, p.from, p.to - p.from);
+      if (cur) {
         tcl_value_t *part = tcl_dup(tcl->result);
         cur = tcl_append(cur, part);
       } else {
-        result = tcl_subst(tcl, p.from, p.to - p.from);
         cur = tcl_dup(tcl->result);
       }
       list = tcl_list_append(list, cur);
@@ -754,14 +753,19 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
       markposition = true;
       break;
     }
-    if (FLOW(result) == FERROR) {
-      tcl_error_result(tcl, result);
+    if (!FLOW_NORMAL(result)) {
+      if (FLOW(result) == FERROR) {
+        tcl_error_result(tcl, result);
+      }
       break;
     }
   }
   /* when arrived at the end of the buffer, if the list is non-empty, run that
      last command */
   if (FLOW_NORMAL(result) && tcl_list_count(list) > 0) {
+    if (cur) {
+      list = tcl_list_append(list, cur);
+    }
     result = tcl_exec_cmd(tcl, list);
   }
   tcl_list_free(list);
@@ -1682,8 +1686,41 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
     size_t size = tcl_list_size(args);
     expression = tcl_value(args + 4, size - 4, false);  /* "expr" is 4 characters */
   }
-  /* parse expression */
   int r = FNORMAL;
+  /* nested square brackets must be evaluated before proceeding with the expression */
+  for (;;) {
+    const char *open = tcl_string(expression);
+    while (*open != '\0' && *open != '[') {
+      open++;
+    }
+    if (*open != '[') {
+      break;
+    }
+    const char *close = open + 1;
+    int depth = 1;
+    while (*close != '\0') {
+      if (*close == ']') {
+        if (--depth == 0) {
+          break;
+        }
+      } else if (*close == '[') {
+        depth++;
+      }
+      close++;
+    }
+    if (depth == 0) {
+      assert(*close == ']');
+      /* split the expression string up in 3 blocks, evaluate the middle part */
+      tcl_value_t *prefix = tcl_value(tcl_string(expression), open - tcl_string(expression), false);
+      tcl_value_t *suffix = tcl_value(close + 1, tcl_length(expression) - ((close + 1) - tcl_string(expression)), false);
+      r = tcl_eval(tcl, open + 1, close - open - 1);
+      /* build the new expression */
+      tcl_free(expression);
+      expression = tcl_append(prefix, tcl_dup(tcl->result));
+      expression = tcl_append(expression, suffix);
+    }
+  }
+  /* parse expression */
   char buf[64] = "";
   char *retptr = buf;
   long result;
