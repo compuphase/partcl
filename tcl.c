@@ -344,22 +344,30 @@ size_t tcl_list_size(tcl_value_t *list) { /* returns the size in bytes of the li
   return (p - list);
 }
 
-tcl_value_t *tcl_list_at(tcl_value_t *list, int index) {
+static bool tcl_list_at_pointer(tcl_value_t *list, int index, const char **data, size_t *size) {
   int i = 0;
   tcl_each(tcl_string(list), tcl_length(list) + 1, 0) {
     if (p.token == TWORD) {
       if (i == index) {
-        const char *data = p.from;
-        size_t sz = p.to - p.from;
-        if (*data == '{') {
-          data += 1;
-          sz -= 2;
+        *data = p.from;
+        *size = p.to - p.from;
+        if (**data == '{') {
+          *data += 1;
+          *size -= 2;
         }
-        return tcl_value(data, sz, tcl_binary(data, sz));
+        return true;
       }
       i++;
     }
   }
+  return false;
+}
+
+tcl_value_t *tcl_list_at(tcl_value_t *list, int index) {
+  const char *data;
+  size_t sz;
+  if (tcl_list_at_pointer(list, index, &data, &sz))
+    return tcl_value(data, sz, tcl_binary(data, sz));
   return NULL;
 }
 
@@ -430,12 +438,19 @@ static int tcl_error_result(struct tcl *tcl, int flow);
 static int tcl_var_index(tcl_value_t *name, size_t *baselength);
 
 struct tcl_cmd {
-  tcl_value_t *name;  /**< function name */
-  int arity;          /**< number of parameters (including function name); 0 = variable */
-  tcl_cmd_fn_t fn;    /**< function pointer */
-  void *user;         /**< user value, used for the code block for Tcl procs */
-  const char *declpos;/**< position of declaration (Tcl procs) */
+  tcl_value_t *name;    /**< function name */
+  int arity;            /**< number of parameters (including function name); 0 = variable */
+  tcl_cmd_fn_t fn;      /**< function pointer */
+  void *user;           /**< user value, used for the code block for Tcl procs */
+  const char *declpos;  /**< position of declaration (Tcl procs) */
   struct tcl_cmd *next;
+};
+
+struct tcl_errinfo {
+  const char *codebase; /**< the string with the main block of a proc or of the script */
+  size_t codesize;      /**< the size of the main plock */
+  const char *currentpos; /**< points to the start of the current command */
+  short errorcode;      /**< the error code */
 };
 
 struct tcl_var {
@@ -449,11 +464,12 @@ struct tcl_var {
 struct tcl_env {
   struct tcl_var *vars;
   struct tcl_env *parent;
+  struct tcl_errinfo errinfo;
 };
 
 static struct tcl_env *tcl_env_alloc(struct tcl_env *parent) {
-  struct tcl_env *env = malloc(sizeof(*env));
-  env->vars = NULL;
+  struct tcl_env *env = malloc(sizeof(struct tcl_env));
+  memset(env, 0, sizeof(struct tcl_env));
   env->parent = parent;
   return env;
 }
@@ -499,6 +515,14 @@ static struct tcl_env *tcl_env_free(struct tcl_env *env) {
   return parent;
 }
 
+static struct tcl_env *tcl_global_env(struct tcl *tcl) {
+  struct tcl_env *global_env = tcl->env;
+  while (global_env->parent) {
+    global_env = global_env->parent;
+  }
+  return global_env;
+}
+
 static int tcl_var_index(tcl_value_t *name, size_t *baselength) {
   size_t len = tcl_length(name);
   const char *base = tcl_string(name);
@@ -542,11 +566,7 @@ tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
   DBG("var(%s := %.*s)\n", tcl_string(name), tcl_length(value), tcl_string(value));
   struct tcl_var *var = tcl_findvar(tcl->env, name);
   if (var && var->global) { /* found local alias of a global variable; find the global */
-    struct tcl_env *global_env = tcl->env;
-    while (global_env->parent) {
-      global_env = global_env->parent;
-    }
-    var = tcl_findvar(global_env, name);
+    var = tcl_findvar(tcl_global_env(tcl), name);
   }
   if (!var) {
     if (!value) { /* value being read before being set */
@@ -584,18 +604,12 @@ tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value) {
   return var->value[idx];
 }
 
-static void tcl_markposition(struct tcl *tcl, const char *pos) {
-  if (!tcl->env->parent && tcl->nestlevel == 1 && tcl->errorcode == 0) {
-    tcl->errorpos = pos;
-  }
-}
-
 int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result) {
   DBG("tcl_result %.*s, flow=%d\n", tcl_length(result), tcl_string(result), flow);
   tcl_free(tcl->result);
   tcl->result = result;
-  if (FLOW(flow) == FERROR && tcl->errorcode == 0) {
-    tcl->errorcode = flow >> 8;
+  if (FLOW(flow) == FERROR && tcl->env->errinfo.errorcode == 0) {
+    tcl->env->errinfo.errorcode = flow >> 8;
   }
   return FLOW(flow);
 }
@@ -666,31 +680,45 @@ static int tcl_subst(struct tcl *tcl, const char *s, size_t len) {
   }
 }
 
-static int tcl_exec_cmd(struct tcl *tcl, tcl_value_t *list) {
-  tcl_value_t *cmdname = tcl_list_at(list, 0);
-  struct tcl_cmd *cmd = NULL;
-  int r = MARKFLOW(FERROR, TCLERR_CMDUNKNOWN);  /* default, in case no command matches */
-  for (cmd = tcl->cmds; cmd != NULL; cmd = cmd->next) {
-    if (strcmp(tcl_string(cmdname), tcl_string(cmd->name)) == 0) {
-      if (cmd->arity == 0 || cmd->arity == tcl_list_count(list)) {
-        r = cmd->fn(tcl, list, cmd->user);
-        break;
-      }
+static struct tcl_cmd *tcl_lookup_cmd(struct tcl *tcl, tcl_value_t *name, int arity) {
+  for (struct tcl_cmd *cmd = tcl->cmds; cmd != NULL; cmd = cmd->next) {
+    if (strcmp(tcl_string(name), tcl_string(cmd->name)) == 0 &&
+        (cmd->arity == 0 || arity == 0 || cmd->arity == arity)) {
+      return cmd;
     }
   }
+  return NULL;
+}
+
+static int tcl_exec_cmd(struct tcl *tcl, tcl_value_t *list) {
+  tcl_value_t *cmdname = tcl_list_at(list, 0);
+  struct tcl_cmd *cmd = tcl_lookup_cmd(tcl, cmdname, tcl_list_count(list));
   tcl_free(cmdname);
-  return r;
+  if (!cmd) {
+    return MARKFLOW(FERROR, TCLERR_CMDUNKNOWN);
+  }
+  return cmd->fn(tcl, list, cmd->user);
 }
 
 int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
   DBG("eval(%.*s)->\n", (int)length, string);
-  tcl->nestlevel += 1;
+  if (!tcl->env->errinfo.codebase) {
+    tcl->env->errinfo.codebase = string;
+    tcl->env->errinfo.codesize = length;
+  }
   tcl_value_t *list = tcl_list_alloc();
   tcl_value_t *cur = NULL;
   int result = FNORMAL;
+  bool markposition = true;
   tcl_each(string, length, 1) {
     DBG("tcl_next %d %.*s\n", p.token, (int)(p.to - p.from), p.from);
-    tcl_markposition(tcl, p.from);
+    if (markposition) {
+      struct tcl_errinfo *info = &tcl->env->errinfo;
+      if (p.from >= info->codebase && p.from < info->codebase + info->codesize) {
+        info->currentpos = p.from;
+      }
+      markposition = false;
+    }
     switch (p.token) {
     case TERROR:
       DBG("eval: FERROR, lexer error\n");
@@ -723,6 +751,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
       } else {
         result = FNORMAL;
       }
+      markposition = true;
       break;
     }
     if (FLOW(result) == FERROR) {
@@ -736,10 +765,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
     result = tcl_exec_cmd(tcl, list);
   }
   tcl_list_free(list);
-  if (--tcl->nestlevel == 0) {
-    result = (tcl->errorcode > 0) ? FERROR : FLOW(result);
-  }
-  return result;
+  return (tcl->env->errinfo.errorcode > 0) ? FERROR : FLOW(result);
 }
 
 /* --------------------------------- */
@@ -756,15 +782,19 @@ static bool tcl_expect_args_ok(tcl_value_t *args, int min_args, int max_args) {
   return min_args <= n && (n <= max_args || max_args == 0);
 }
 
-void tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, int arity,
-                  void *user) {
+struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
+                             int arity, void *user) {
   struct tcl_cmd *cmd = malloc(sizeof(struct tcl_cmd));
-  cmd->name = tcl_value(name, strlen(name), false);
-  cmd->fn = fn;
-  cmd->user = user;
-  cmd->arity = arity;
-  cmd->next = tcl->cmds;
-  tcl->cmds = cmd;
+  if (cmd) {
+    memset(cmd, 0, sizeof(struct tcl_cmd));
+    cmd->name = tcl_value(name, strlen(name), false);
+    cmd->fn = fn;
+    cmd->user = user;
+    cmd->arity = arity;
+    cmd->next = tcl->cmds;
+    tcl->cmds = cmd;
+  }
+  return cmd;
 }
 
 static int tcl_cmd_set(struct tcl *tcl, tcl_value_t *args, void *arg) {
@@ -785,10 +815,6 @@ static int tcl_cmd_global(struct tcl *tcl, tcl_value_t *args, void *arg) {
   if (!tcl_expect_args_ok(args, 2, 0)) {
     return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
   }
-  struct tcl_env *global_env = tcl->env;
-  while (global_env->parent) {
-    global_env = global_env->parent;
-  }
   int r = FNORMAL;
   int n = tcl_list_count(args);
   for (int i = 1; i < n; i++) {
@@ -798,7 +824,7 @@ static int tcl_cmd_global(struct tcl *tcl, tcl_value_t *args, void *arg) {
     if ((var = tcl_findvar(tcl->env, name)) != NULL) {
       /* name exists locally, cannot create an alias with the same name */
       r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARNAME));
-    } else if (tcl_findvar(global_env, name) == NULL) {
+    } else if (tcl_findvar(tcl_global_env(tcl), name) == NULL) {
       /* name not known as a global */
       r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARUNKNOWN));
     } else {
@@ -1050,6 +1076,23 @@ static int tcl_user_proc(struct tcl *tcl, tcl_value_t *args, void *arg) {
     tcl_free(param);
   }
   int r = tcl_eval(tcl, tcl_string(body), tcl_length(body) + 1);
+  if (FLOW(r) == FERROR || tcl->env->errinfo.errorcode != 0) {
+    size_t error_offs = tcl->env->errinfo.currentpos - tcl->env->errinfo.codebase;
+    /* need to calculate the offset of the body relative to the start of the
+       proc declaration */
+    const char *body_ptr;
+    size_t body_sz;
+    tcl_list_at_pointer(code, 3, &body_ptr, &body_sz);
+    error_offs += body_ptr - code;
+    /* need to find the proc again */
+    tcl_value_t *cmdname = tcl_list_at(code, 1);
+    struct tcl_cmd *cmd = tcl_lookup_cmd(tcl, cmdname, 0);
+    tcl_free(cmdname);
+    assert(cmd);  /* it just ran, so it must be found */
+    struct tcl_env *global_env = tcl_global_env(tcl);
+    global_env->errinfo.errorcode = tcl->env->errinfo.errorcode;
+    global_env->errinfo.currentpos = cmd->declpos + error_offs;
+  }
   tcl->env = tcl_env_free(tcl->env);
   tcl_free(params);
   tcl_free(body);
@@ -1059,10 +1102,10 @@ static int tcl_user_proc(struct tcl *tcl, tcl_value_t *args, void *arg) {
 static int tcl_cmd_proc(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   tcl_value_t *name = tcl_list_at(args, 1);
-  tcl_register(tcl, tcl_string(name), tcl_user_proc, 0, tcl_dup(args));
+  struct tcl_cmd *cmd = tcl_register(tcl, tcl_string(name), tcl_user_proc, 0, tcl_dup(args));
   tcl_free(name);
-  struct tcl_cmd *cmd = tcl->cmds;  /* function was just added to the head of the list */
-  cmd->declpos = tcl->errorpos;
+  struct tcl_env *global_env = tcl_global_env(tcl);
+  cmd->declpos = global_env->errinfo.currentpos;
   return tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
 }
 
@@ -1650,7 +1693,7 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   } else {
     r = MARKFLOW(FERROR, TCLERR_EXPR);
   }
-  free(expression);
+  tcl_free(expression);
 
   /* convert result to string & store */
   return tcl_result(tcl, r, tcl_value(retptr, strlen(retptr), false));
@@ -1702,14 +1745,17 @@ void tcl_destroy(struct tcl *tcl) {
   memset(tcl, 0, sizeof(struct tcl));
 }
 
-void tcl_errorpos(struct tcl *tcl, const char *script, int *line, int *column) {
+void tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
   assert(tcl);
-  assert(script);
+  assert(code);
   assert(line);
   assert(column);
+  struct tcl_env *global_env = tcl_global_env(tcl);
+  *code = global_env->errinfo.errorcode;
   *line = 1;
+  const char *script = global_env->errinfo.codebase;
   const char *linebase = script;
-  while (script < tcl->errorpos) {
+  while (script < global_env->errinfo.currentpos) {
     if (*script == '\r' || *script == '\n') {
       *line += 1;
       linebase = script + 1;
@@ -1719,7 +1765,7 @@ void tcl_errorpos(struct tcl *tcl, const char *script, int *line, int *column) {
     }
     script++;
   }
-  *column = tcl->errorpos - linebase + 1;
+  *column = global_env->errinfo.currentpos - linebase + 1;
 }
 
 const char *tcl_cobs_encode(const char *bindata, size_t *length) {

@@ -10,9 +10,6 @@ struct tcl {
   struct tcl_env *env;
   struct tcl_cmd *cmds;
   tcl_value_t *result;
-  const char *errorpos;
-  short errorcode;
-  short nestlevel;
 };
 
 
@@ -47,11 +44,11 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length);
 /** tcl_errorpos() returns the (approximate) line & column number of the
  *  error.
  *  \param tcl      The interpreter context.
- *  \param script   The buffer with the script.
+ *  \param code     [out] The error code.
  *  \param line     [out] The line number (1-based).
  *  \param column   [out] The column number (1-based).
  */
-void tcl_errorpos(struct tcl *tcl, const char *script, int *line, int *column);
+void tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column);
 enum {
   TCLERR_GENERAL,     /**< unspecified error */
   TCLERR_SYNTAX,      /**< syntax error, e.g. unbalanced brackets */
@@ -190,8 +187,10 @@ typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, tcl_value_t *args, void *user);
  *                  command name itself. Set this to zero for a variable
  *                  argument list.
  *  \param user     A user value (which is passed to the C function).
+ *
+ *  \return A pointer to the command structure that was just added.
  */
-void tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, int arity, void *user);
+struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, int arity, void *user);
 
 /** tcl_result() sets the result of a C function into the ParTcl environment.
  *  \param tcl      The interpreter context.
