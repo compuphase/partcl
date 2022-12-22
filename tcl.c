@@ -26,6 +26,7 @@ SOFTWARE.
 */
 #include <assert.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -434,6 +435,7 @@ tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail) {
 /* ----------------------------- */
 /* ----------------------------- */
 
+static char *tcl_int2string(char *buffer, size_t bufsz, int radix, long value);
 static int tcl_error_result(struct tcl *tcl, int flow);
 static int tcl_var_index(tcl_value_t *name, size_t *baselength);
 
@@ -614,6 +616,12 @@ int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result) {
   return FLOW(flow);
 }
 
+static int tcl_int_result(struct tcl *tcl, int flow, long result) {
+  char buf[64] = "";
+  char *ptr = tcl_int2string(buf, sizeof(buf), 10, result);
+  return tcl_result(tcl, flow, tcl_value(ptr, strlen(ptr), false));
+}
+
 static int tcl_error_result(struct tcl *tcl, int flow) {
   /* helper function for a common case */
   return tcl_result(tcl, flow, tcl_value("", 0, false));
@@ -779,7 +787,6 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
 /* --------------------------------- */
 
 static int tcl_expression(struct tcl *tcl, const char *expression, long *result);  /* forward declaration */
-static char *tcl_int2string(char *buffer, size_t bufsz, int radix, long value);
 
 static bool tcl_expect_args_ok(tcl_value_t *args, int min_args, int max_args) {
   int n = tcl_list_count(args);
@@ -918,10 +925,7 @@ static int tcl_cmd_scan(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
   tcl_free(string);
   tcl_free(format);
-
-  char buf[64];
-  char *p = tcl_int2string(buf, sizeof buf, 10, match);
-  return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
+  return tcl_int_result(tcl, FNORMAL, match);
 }
 
 static int tcl_cmd_format(struct tcl *tcl, tcl_value_t *args, void *arg) {
@@ -1057,6 +1061,129 @@ static int tcl_cmd_incr(struct tcl *tcl, tcl_value_t *args, void *arg) {
   tcl_var(tcl, name, tcl_value(p, strlen(p), false));
   tcl_free(name);
   return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p), false));
+}
+
+#define SUBCMD(v, s)  (strcmp(tcl_string(v), (s)) == 0)
+
+/* source: https://stackoverflow.com/a/23457543 */
+static bool tcl_match(const char *pattern, const char *candidate, int p, int c) {
+  if (pattern[p] == '\0') {
+    return candidate[c] == '\0';
+  } else if (pattern[p] == '*') {
+    for (; candidate[c] != '\0'; c++) {
+      if (tcl_match(pattern, candidate, p+1, c))
+        return true;
+    }
+    return tcl_match(pattern, candidate, p+1, c);
+  } else if (pattern[p] != '?' && pattern[p] != candidate[c]) {
+    return false;
+  }  else {
+    return tcl_match(pattern, candidate, p+1, c+1);
+  }
+}
+
+static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  int nargs = tcl_list_count(args);
+  if (nargs < 3) {  /* need at least "string subcommand arg" */
+    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  int r = FERROR;
+  tcl_value_t *subcmd = tcl_list_at(args, 1);
+  tcl_value_t *arg1 = tcl_list_at(args, 2);
+  if (SUBCMD(subcmd, "length")) {
+    r = tcl_int_result(tcl, FNORMAL, tcl_length(arg1));
+  } else if (SUBCMD(subcmd, "tolower") || SUBCMD(subcmd, "toupper")) {
+    bool lcase = SUBCMD(subcmd, "tolower");
+    tcl_value_t *tgt = tcl_dup(arg1);
+    size_t sz = tcl_length(tgt);
+    char *base = (char*)tcl_string(tgt);
+    for (size_t i = 0; i < sz; i++) {
+      base[i] = lcase ? tolower(base[i]) : toupper(base[i]);
+    }
+  } else {
+    if (nargs < 4) {  /* need at least "string subcommand arg arg" */
+      tcl_free(subcmd);
+      tcl_free(arg1);
+      return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+    }
+    tcl_value_t *arg2 = tcl_list_at(args, 3);
+    if (SUBCMD(subcmd, "compare")) {
+      r = tcl_int_result(tcl, FNORMAL, strcmp(tcl_string(arg1), tcl_string(arg2)));
+    } else if (SUBCMD(subcmd, "equal")) {
+      r = tcl_int_result(tcl, FNORMAL, strcmp(tcl_string(arg1), tcl_string(arg2)) == 0);
+    } else if (SUBCMD(subcmd, "first") || SUBCMD(subcmd, "last")) {
+      int pos = 0;
+      if (nargs >= 5) {
+        tcl_value_t *arg3 = tcl_list_at(args, 4);
+        pos = tcl_int(arg3);
+        tcl_free(arg3);
+      }
+      const char *haystack = tcl_string(arg2);
+      const char *needle = tcl_string(arg1);
+      const char *p = NULL;
+      if (SUBCMD(subcmd, "first")) {
+        if (pos < tcl_length(arg2)) {
+          p = strstr(haystack + pos, needle);
+        }
+      } else {
+        if (nargs < 5) {
+          pos = tcl_length(arg2);
+        }
+        int len = strlen(needle);
+        p = haystack + pos - len;
+        while (p >= haystack) {
+          if (strncmp(p, needle, len) == 0) {
+            break;
+          }
+          p--;
+        }
+      }
+      r = tcl_int_result(tcl, FNORMAL, (p && p >= haystack) ? (p - haystack) : -1);
+    } else if (SUBCMD(subcmd, "index")) {
+      int pos = tcl_int(arg2);
+      if (pos >= tcl_length(arg1)) {
+        r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+      } else {
+        r = tcl_result(tcl, FNORMAL, tcl_value(tcl_string(arg1) + pos, 1, false));
+      }
+    } else if (SUBCMD(subcmd, "match")) {
+      if (tcl_length(arg1) == 0 || (tcl_length(arg2) == 0 && strcmp(tcl_string(arg1), "*") != 0)) {
+        r = tcl_int_result(tcl, FNORMAL, 0);
+      } else {
+        r = tcl_int_result(tcl, FNORMAL, tcl_match(tcl_string(arg1), tcl_string(arg2), 0, 0));
+      }
+    } else if (SUBCMD(subcmd, "range")) {
+      int first = tcl_int(arg2);
+      if (first < 0) {
+        first = 0;
+      }
+      int last = INT_MAX;
+      if (nargs >= 5) {
+        tcl_value_t *arg3 = tcl_list_at(args, 4);
+        if (strcmp(tcl_string(arg3), "end") != 0) {
+          last = tcl_int(arg3);
+        }
+        tcl_free(arg3);
+      }
+      if (last > tcl_length(arg1)) {
+        last = tcl_length(arg1);
+      }
+      r =tcl_result(tcl, FNORMAL, tcl_value(tcl_string(arg1) + first, last - first + 1, false));
+    }
+    tcl_free(arg2);
+  }
+  tcl_free(subcmd);
+  tcl_free(arg1);
+  return r;
+}
+
+static int tcl_cmd_exists(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  tcl_value_t *name = tcl_list_at(args, 1);
+  int result = (tcl_findvar(tcl->env, name) != NULL);
+  tcl_free(name);
+  return tcl_int_result(tcl, FNORMAL, result);
 }
 
 #ifndef TCL_DISABLE_PUTS
@@ -1721,19 +1848,15 @@ static int tcl_cmd_expr(struct tcl *tcl, tcl_value_t *args, void *arg) {
     }
   }
   /* parse expression */
-  char buf[64] = "";
-  char *retptr = buf;
   long result;
   int err = tcl_expression(tcl, expression, &result);
-  if (err == eNONE) {
-    retptr = tcl_int2string(buf, sizeof(buf), 10, result);
-  } else {
+  if (err != eNONE) {
     r = MARKFLOW(FERROR, TCLERR_EXPR);
   }
   tcl_free(expression);
 
   /* convert result to string & store */
-  return tcl_result(tcl, r, tcl_value(retptr, strlen(retptr), false));
+  return tcl_int_result(tcl, r, result);
 }
 
 /* ------------------------------------------------------- */
@@ -1749,6 +1872,7 @@ void tcl_init(struct tcl *tcl) {
   tcl->result = tcl_value("", 0, false);
   tcl_register(tcl, "break", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
+  tcl_register(tcl, "exists", tcl_cmd_exists, 2, NULL);
   tcl_register(tcl, "expr", tcl_cmd_expr, 0, NULL);
   tcl_register(tcl, "for", tcl_cmd_for, 5, NULL);
   tcl_register(tcl, "format", tcl_cmd_format, 0, NULL);
@@ -1759,6 +1883,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "return", tcl_cmd_flow, 0, NULL);
   tcl_register(tcl, "scan", tcl_cmd_scan, 0, NULL);
   tcl_register(tcl, "set", tcl_cmd_set, 0, NULL);
+  tcl_register(tcl, "string", tcl_cmd_string, 0, NULL);
   tcl_register(tcl, "subst", tcl_cmd_subst, 2, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, NULL);
 #ifndef TCL_DISABLE_PUTS
