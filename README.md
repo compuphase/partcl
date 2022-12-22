@@ -10,21 +10,6 @@ Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
 * Can be extended with custom Tcl commands
 * Runs well on bare metal embedded MCUs
 
-Built-in commands:
-
-* `subst arg`
-* `set var ?val?`
-* `global var ?var? ...`
-* `expr` (with some limitations, see below)
-* `incr`
-* `scan` (very limited)
-* `while cond loop`
-* `if cond branch ?cond? ?branch? ?other?`
-* `proc name args body`
-* `return`
-* `break`
-* `continue`
-
 ## Usage
 
 ```c
@@ -45,16 +30,40 @@ tcl_destroy(&tcl);
 ## Language syntax
 
 Tcl script is made up of _commands_ separated by semicolons or newline
-symbols. Commands in their turn are made up of _words_ separated by whitespace.
-To make whitespace a part of the word one may use double quotes or braces.
+symbols. Commands in their turn are made up of _fields_ separated by whitespace.
+A word is a field, as long as it does not contain a space character. To make
+whitespace a part of the field one may use double quotes or curly braces.
 
 An important part of the language is _command substitution_, when the result of
 a command inside square braces is returned as a part of the outer command, e.g.
-`puts [expr 1 + 2]`.
+`puts [expr 1 + 2]`. Apart from command substitution, Tcl also knows _variable substitution_.
+However, command and variable substitution does _not_ happen inside fields that
+are enveloped in curly braces.
 
-The only data type of the language is a string. Although it may complicate
-mathematical operations, it opens a broad way for building your own DSLs to
-enhance the language.
+The only data type of the language is a string. When a variable (or field) contains
+only digits, it may be implicitly interpreted as a number (specifically in the `expr`
+builtin command), but that same variable can still be used in string operations.
+
+## Builtin commands
+
+| name   | Summary |
+| ------ | ------- |
+| break  | Aborts a loop, jumps to the first instruction following the loop. |
+| continue | Skips the remainder of the loop body, jumps back to the condition of the loop. |
+| expr   | Interprets the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
+| format | formats a string with placeholders, similar to `sprintf` in C. Currently only `%c`, `%d`, `%i`, `%x` and `%s` are supported, plus optional "padding" and "alignment" modifiers (e.g. `%04x` or `%-20s`). |
+| global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
+| if     | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
+| incr   | Increments or decrements a variable. |
+| proc   | Creates a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
+| puts   | Prints argument to the stdout, followed by a newline. This command can be disabled using `#define TCL_DISABLE_PUTS`, which is handy for embedded systems that don't have "stdout". |
+| return | Jumps out of the current command (`proc`), with an optional explicit return value. |
+| scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
+| set    | Assigns value to the variable and/or returns the current variable value. |
+| subst  | Does command substitution in the argument string. |
+| while  | Runs a while loop `while {cond} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
+
+# Internals
 
 ## Lexer
 
@@ -196,24 +205,6 @@ no commands, but one may add the commands by calling `tcl_register()`.
 Each command has a name, arity (how many arguments it shall take - interpreter
 checks it before calling the command, use zero arity for varargs) and a C
 function pointer that actually implements the command.
-
-## Builtin commands
-
-|name   | Summary |
-| ----- | ------- |
-| break | Aborts a loop, jumps to the first instruction following the loop. |
-| continue | Skips the remainder of the loop body, jumps back to the condition of the loop. |
-|expr   | Interprets the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
-|global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
-| if    | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
-| incr  | Increments or decrements a variable. |
-| proc  | Creates a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
-| puts  | Prints argument to the stdout, followed by a newline. This command can be disabled using `#define TCL_DISABLE_PUTS`, which is handy for embedded systems that don't have "stdout". |
-| return | Jumps out of the current command (`proc`), with an optional explicit return value. |
-|scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
-| set   | Assigns value to the variable (if any) and returns the current variable value. |
-| subst | Does command substitution in the argument string. |
-| while | Runs a while loop `while {cond} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 
 ## Building and testing
 
