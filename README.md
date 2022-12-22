@@ -4,7 +4,7 @@ Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
 
 ## Features
 
-* Small, plain C99 code (although now twice as long as the ~600 lines of the original)
+* Small, plain C99 code (although now over twice as long than the ~600 lines of the original)
 * No external dependencies
 * Good test coverage
 * Can be extended with custom Tcl commands
@@ -20,9 +20,9 @@ tcl_init(&tcl);
 if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
     printf("Result: %.*s\n", tcl_length(tcl.result), tcl_string(tcl.result));
 } else {
-    int line, column;
-    tcl_errorpos(&tcl, script, &line, &column);
-    printf("Error near line %d, column %d\n", line, column);
+    int code, line, column;
+    tcl_errorpos(&tcl, &code, &line, &column);
+    printf("Error (type %d) near line %d, column %d\n", code, line, column);
 }
 tcl_destroy(&tcl);
 ```
@@ -60,7 +60,7 @@ builtin command), but that same variable can still be used in string operations.
 | return | Jumps out of the current command (`proc`), with an optional explicit return value. |
 | scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
 | set    | Assigns value to the variable and/or returns the current variable value. |
-| subst  | Does command substitution in the argument string. |
+| subst  | Performs command and variable substitution in the argument string. |
 | while  | Runs a while loop `while {cond} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 
 # Internals
