@@ -50,8 +50,11 @@ builtin command), but that same variable can still be used in string operations.
 | ------ | ------- |
 | break  | Aborts a loop, jumps to the first instruction following the loop. |
 | continue | Skips the remainder of the loop body, jumps back to the condition of the loop. |
+| exists | The command `exists var` returns 1 if the variable exists, and 0 otherwise. This is `info exists` in standard Tcl. |
+| exit   | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
 | expr   | Interprets the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
-| format | formats a string with placeholders, similar to `sprintf` in C. Currently only `%c`, `%d`, `%i`, `%x` and `%s` are supported, plus optional "padding" and "alignment" modifiers (e.g. `%04x` or `%-20s`). |
+| for    | Runs a loop `for {setup} {condition} {post} {body}`.  One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
+| format | Formats a string with placeholders, similar to `sprintf` in C. Currently only `%c`, `%d`, `%i`, `%x` and `%s` are supported, plus optional "padding" and "alignment" modifiers (e.g. `%04x` or `%-20s`). |
 | global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
 | if     | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
 | incr   | Increments or decrements a variable. |
@@ -60,8 +63,10 @@ builtin command), but that same variable can still be used in string operations.
 | return | Jumps out of the current command (`proc`), with an optional explicit return value. |
 | scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
 | set    | Assigns value to the variable and/or returns the current variable value. |
+| string | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`. |
 | subst  | Performs command and variable substitution in the argument string. |
-| while  | Runs a while loop `while {cond} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
+| unset  | Clear a variable (removed it completely). |
+| while  | Runs a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 
 # Internals
 
