@@ -72,7 +72,7 @@ enum {
  *
  *  \return The detected value.
  */
-int tcl_type(tcl_value_t *v);
+int tcl_type(const tcl_value_t *v);
 enum {
   TCLTYPE_EMPTY,
   TCLTYPE_STRING,
@@ -86,14 +86,14 @@ enum {
  *
  *  \return A pointer to the buffer.
  */
-const char *tcl_string(tcl_value_t *v);
+const char *tcl_string(const tcl_value_t *v);
 
 /** tcl_length() returns the length of the contents of the value in bytes.
  *  \param v        The value.
  *
  *  \return The number of bytes in the buffer of the value.
  */
-size_t tcl_length(tcl_value_t *v);
+size_t tcl_length(const tcl_value_t *v);
 
 /** tcl_int() returns the value of a variable after parsing it as an integer
  *  value. The function supports decimal, octal and dexadecimal notation.
@@ -101,7 +101,7 @@ size_t tcl_length(tcl_value_t *v);
  *
  *  \return The numeric value of the parameter, or 0 on error.
  */
-long tcl_int(tcl_value_t *v);
+long tcl_int(const tcl_value_t *v);
 
 /** tcl_value() creates a value from a C string or data block.
  *  \param data     The contents to store in the value.
@@ -127,14 +127,14 @@ tcl_value_t *tcl_value(const char *data, size_t len, bool binary);
  */
 tcl_value_t *tcl_free(tcl_value_t *v);
 
-/** tcl_list_count() returns the number of elements in a list.
+/** tcl_list_length() returns the number of elements in a list.
  *  \param list       The list.
  *
  *  \return The number of elements in the list.
  */
-int tcl_list_count(tcl_value_t *list);
+int tcl_list_length(tcl_value_t *list);
 
-/** tcl_list_at() retrieves an element from the list.
+/** tcl_list_item() retrieves an element from the list.
  *  \param list       The list.
  *  \param index      The zero-based index of the element to retrieve.
  *
@@ -142,7 +142,7 @@ int tcl_list_count(tcl_value_t *list);
  *
  *  \note The returned element is a copy, which must be freed with tcl_free().
  */
-tcl_value_t *tcl_list_at(tcl_value_t *list, int index);
+tcl_value_t *tcl_list_item(tcl_value_t *list, int index);
 
 /** tcl_list_append() appends an item to the list, and frees the item.
  *  \param list       The original list.
@@ -164,14 +164,20 @@ tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail);
  *  \param tcl      The interpreter context.
  *  \param name     The name of the variable.
  *  \param value    The value to set the variable to, or NULL to read the value
- *                  of the variable.
+ *                  of the variable. See notes below.
  *
- *  \return A pointer to the value in the variable.
+ *  \return A pointer to the value in the variable. See notes below.
  *
  *  \note When reading a variable that does not exist, an new variable is
  *        created, with empty contents.
+ *
+ *  \note The returned pointer points to the value in the tcl_var structure; it
+ *        is not a copy (and must not be freed or changed).
+ *
+ *  \note The "value" parameter (if not NULL) is owned by the variable after
+ *        this function completes. Thus, the parameter should not be freed.
  */
-tcl_value_t *tcl_var(struct tcl *tcl, tcl_value_t *name, tcl_value_t *value);
+const tcl_value_t *tcl_var(struct tcl *tcl, const char *name, tcl_value_t *value);
 
 
 /* =========================================================================
@@ -197,44 +203,25 @@ struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
  *  \param tcl      The interpreter context.
  *  \param flow     Should be set to 0 if an error occurred, or 1 on success
  *                  (other values for "flow" are used internally).
- *  \param result   The result (or "return value") of the C function.
+ *  \param result   The result (or "return value") of the C function. See notes
+ *                  below.
  *
  *  \return This function returs the "flow" parameter. For the C interface, the
  *          return value can be ignored.
+ *
+ *  \note The "result" parameter is is owned by the interpreter context when
+ *        this function completes. Thus, the parameter should not be freed.
  */
 int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result);
 
 
 /* =========================================================================
-    COBS encoding
+    Internals
    ========================================================================= */
 
-/** tcl_cobs_encode() encodes a binary data block such that no embedded zero
- *  bytes occur in the middle; a zero-terminator is appended to the end, though
- *  (COBS encoding).
- *  \param bindata  The block with binary data.
- *  \param length   [in/out] On input, the length of the bindata buffer; on
- *                  output, the size of the output buffer.
- *
- *  \return A pointer to a buffer with the encoded data (or NULL on failure).
- *
- *  \note The returned memory block must be deallocated with free().
- *
- *  \note The returned length is the same as strlen() of the returned buffer,
- *        plus 1 for the zero-terminator.
+/** tcl_append() creates a new value that is the concatenation of the two
+ *  parameters, and deletes the input parameters.
  */
-const char *tcl_cobs_encode(const char *bindata, size_t *length);
-
-/** tcl_cobs_decode() decodes an COBS-encoded block, and returns the original
- *  binary encoded block.
- *  \param asciiz   The block with encoded data.
- *  \param length   [in/out] On input, the length of the asciiz buffer; on
- *                  output, the size of the output buffer.
- *
- *  \return A pointer to a buffer with the decoded data (or NULL on failure).
- *
- *  \note The returned memory block must be deallocated with free().
- */
-const char *tcl_cobs_decode(const char *asciiz, size_t *length);
+tcl_value_t *tcl_append(tcl_value_t *value, tcl_value_t *tail);
 
 #endif /* _TCL_H */
