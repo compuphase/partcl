@@ -1150,6 +1150,29 @@ static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
     for (size_t i = 0; i < sz; i++) {
       base[i] = lcase ? tolower(base[i]) : toupper(base[i]);
     }
+  } else if (SUBCMD(subcmd, "trim") || SUBCMD(subcmd, "trimleft") || SUBCMD(subcmd, "trimright")) {
+    const char *chars = " \t\r\n";
+    tcl_value_t *arg2 = NULL;
+    if (nargs >=4) {
+      tcl_value_t *arg2 = tcl_list_at(args, 3);
+      chars = tcl_string(arg2);
+    }
+    const char *first = tcl_string(arg1);
+    const char *last = first + tcl_length(arg1);
+    if (SUBCMD(subcmd, "trim") || SUBCMD(subcmd, "trimleft")) {
+      while (*first && strchr(chars, *first)) {
+        first++;
+      }
+    }
+    if (SUBCMD(subcmd, "trim") || SUBCMD(subcmd, "trimright")) {
+      while (last>first && strchr(chars, *(last - 1))) {
+        last--;
+      }
+    }
+    r = tcl_result(tcl, FNORMAL, tcl_value(first, last - first, false));
+    if (arg2) {
+      tcl_free(arg2);
+    }
   } else {
     if (nargs < 4) {  /* need at least "string subcommand arg arg" */
       tcl_free(subcmd);
@@ -1157,7 +1180,10 @@ static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
       return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
     }
     tcl_value_t *arg2 = tcl_list_at(args, 3);
-    if (SUBCMD(subcmd, "compare")) {
+    if (SUBCMD(subcmd, "append")) {
+      r = tcl_result(tcl, FNORMAL, tcl_append(arg1, arg2));
+      arg2 = NULL;  /* arg2 is deleted by tcl_append(), don't free it twice */
+    } else if (SUBCMD(subcmd, "compare")) {
       r = tcl_int_result(tcl, FNORMAL, strcmp(tcl_string(arg1), tcl_string(arg2)));
     } else if (SUBCMD(subcmd, "equal")) {
       r = tcl_int_result(tcl, FNORMAL, strcmp(tcl_string(arg1), tcl_string(arg2)) == 0);
@@ -1218,9 +1244,11 @@ static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
       if (last > tcl_length(arg1)) {
         last = tcl_length(arg1);
       }
-      r =tcl_result(tcl, FNORMAL, tcl_value(tcl_string(arg1) + first, last - first + 1, false));
+      r = tcl_result(tcl, FNORMAL, tcl_value(tcl_string(arg1) + first, last - first + 1, false));
     }
-    tcl_free(arg2);
+    if (arg2) {
+      tcl_free(arg2);
+    }
   }
   tcl_free(subcmd);
   tcl_free(arg1);
