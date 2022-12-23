@@ -63,7 +63,7 @@ builtin command), but that same variable can still be used in string operations.
 | return | Jumps out of the current command (`proc`), with an optional explicit return value. |
 | scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
 | set    | Assigns value to the variable and/or returns the current variable value. |
-| string | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`. |
+| string | An assortment of string functions: `append`, `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
 | subst  | Performs command and variable substitution in the argument string. |
 | unset  | Clear a variable (removed it completely). |
 | while  | Runs a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
