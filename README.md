@@ -21,8 +21,8 @@ if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
     printf("Result: %.*s\n", tcl_length(tcl.result), tcl_string(tcl.result));
 } else {
     int code, line, column;
-    tcl_errorpos(&tcl, &code, &line, &column);
-    printf("Error (type %d) near line %d, column %d\n", code, line, column);
+    const char *msg = tcl_errorpos(&tcl, &code, &line, &column);
+    printf("Error [%d] %s near line %d, column %d\n", code, msg, line, column);
 }
 tcl_destroy(&tcl);
 ```
@@ -51,6 +51,7 @@ builtin command), but that same variable can still be used in string operations.
 | append | Append contents to a variable (concatenate strings). |
 | array  | Functions on array variables: `length` (same as `size`), `slice`. |
 | break  | Aborts a loop, jumps to the first instruction following the loop. |
+| concat | Joins multiple lists into a single list. |
 | continue | Skips the remainder of the loop body, jumps back to the condition of the loop. |
 | exists | The command `exists var` returns 1 if the variable exists, and 0 otherwise. This is `info exists` in standard Tcl. |
 | exit   | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
@@ -60,6 +61,11 @@ builtin command), but that same variable can still be used in string operations.
 | global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
 | if     | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
 | incr   | Increments or decrements a variable. |
+| lappend | Appends values to a variable (where the variable is presumed to contain a list). |
+| lindex | Returns a specified element from the list. |
+| list   | Creates a list from the values that follow it. |
+| llength | Returns the number of elements in a list. |
+| lrange | Returns a subset of a source list as a new list. |
 | proc   | Creates a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
 | puts   | Prints argument to the stdout, followed by a newline. This command can be disabled using `#define TCL_DISABLE_PUTS`, which is handy for embedded systems that don't have "stdout". |
 | return | Jumps out of the current command (`proc`), with an optional explicit return value. |
