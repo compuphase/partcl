@@ -94,9 +94,9 @@ These are the operators that can be used in the parameter of the `expr` command.
 | `==` `!=`      | equal, not equal |
 | `&`            | binary and |
 | `^`            | binary exclusive or |
-| `|`            | binary or |
+| `\|`           | binary or |
 | `&&`           | logic and |
-| `||`           | logic or |
+| `\|\|`         | logic or |
 | `? :`          | conditional selection (ternary operator) |
 
 # Internals
