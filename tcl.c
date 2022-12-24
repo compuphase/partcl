@@ -1770,7 +1770,7 @@ struct expr {
   struct tcl *tcl;  /* for variable lookup */
 };
 
-static long expr_logic_or(struct expr *expr);
+static long expr_conditional(struct expr *expr);
 #define lex(e)          ((e)->lexflag ? ((e)->lexflag = 0, (e)->token) : expr_lex(e) )
 #define unlex(e)        ((e)->lexflag = 1)
 
@@ -1790,7 +1790,7 @@ static void expr_skip(struct expr *expr, int number) {
 }
 
 static int expr_lex(struct expr *expr) {
-  static const char special[] = "|&^~<>=!-+*/%(){}";
+  static const char special[] = "?:|&^~<>=!-+*/%(){}";
 
   assert(expr && expr->pos);
   if (*expr->pos == '\0') {
@@ -1880,7 +1880,7 @@ static int expr_lex(struct expr *expr) {
     }
     if (*expr->pos == '(') {
       expr_skip(expr, 1);
-      long v = expr_logic_or(expr);
+      long v = expr_conditional(expr);
       if (lex(expr) != ')')
         expr_error(expr, ePARENTHESES);
       strcat(name, "(");
@@ -1918,7 +1918,7 @@ static long expr_primary(struct expr *expr) {
   case '(':
   case '{':
     tok_close = (expr->token == '(') ? ')' : '}';
-    v = expr_logic_or(expr);
+    v = expr_conditional(expr);
     if (lex(expr) != tok_close)
       expr_error(expr, ePARENTHESES);
     break;
@@ -2082,6 +2082,19 @@ static long expr_logic_or(struct expr *expr) {
   while (lex(expr) == TOK_OR) {
     long v2 = expr_logic_and(expr);
     v1 = v1 || v2;
+  }
+  unlex(expr);
+  return v1;
+}
+
+static long expr_conditional(struct expr *expr) {
+  long v1 = expr_conditional(expr);
+  while (lex(expr) == '?') {
+    long v2 = expr_conditional(expr);
+    if (lex(expr) != ':')
+      expr_error(expr, eINVALID_CHAR);
+    long v3 = expr_conditional(expr);
+    v1 = v1 ? v2 : v3;
   }
   unlex(expr);
   return v1;
