@@ -46,7 +46,7 @@ builtin command), but that same variable can still be used in string operations.
 
 ## Builtin commands
 
-| name   | Summary |
+| name   | summary |
 | ------ | ------- |
 | append | Append contents to a variable (concatenate strings). |
 | array  | Functions on array variables: `length` (same as `size`), `slice`. |
@@ -57,6 +57,7 @@ builtin command), but that same variable can still be used in string operations.
 | exit   | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
 | expr   | Interprets the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
 | for    | Runs a loop `for {setup} {condition} {post} {body}`.  One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
+| foreach | Runs a loop over all elements in a list. |
 | format | Formats a string with placeholders, similar to `sprintf` in C. Currently only `%c`, `%d`, `%i`, `%x` and `%s` are supported, plus optional "padding" and "alignment" modifiers (e.g. `%04x` or `%-20s`). |
 | global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
 | if     | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
@@ -77,6 +78,26 @@ builtin command), but that same variable can still be used in string operations.
 | subst  | Performs command and variable substitution in the argument string. |
 | unset  | Clear a variable (removed it completely). |
 | while  | Runs a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
+
+## Operator table
+
+These are the operators that can be used in the parameter of the `expr` command. The expression evaluator in ParTcl is integer-only.
+
+| operator       | summary |
+| -------------- | ------- |
+| `-` `+` `!` `~` `()` | unary operators: negate, unary plus (a no-operation operator), logic not, binary invert, and sub-expressions between parentheses |
+| `**`           | exponentiation |
+| `*` `/` `%`    | multiply, divide, remainder after division |
+| `+` `-`        | addition, subtraction |
+| `<<` `>>`      | binary shift left & right |
+| `<` `<=` `>` `>=` | smaller than, smaller than or equal, greater than, greater than or equal |
+| `==` `!=`      | equal, not equal |
+| `&`            | binary and |
+| `^`            | binary exclusive or |
+| `|`            | binary or |
+| `&&`           | logic and |
+| `||`           | logic or |
+| `? :`          | conditional selection (ternary operator) |
 
 # Internals
 
