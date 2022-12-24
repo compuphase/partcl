@@ -1483,7 +1483,7 @@ static int tcl_cmd_join(struct tcl *tcl, tcl_value_t *args, void *arg) {
   tcl_value_t *string = NULL;
   for (int i = 0; i < list_len; i++) {
     string = tcl_append(string, tcl_list_item(list, i));
-    if (i + 1 < list_len) {
+    if (i + 1 < list_len && tcl_length(sep) > 0) {
       string = tcl_append(string, tcl_dup(sep));
     }
   }
@@ -1681,6 +1681,31 @@ static int tcl_cmd_for(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
   tcl_list_free(cond);
   tcl_free(post);
+  tcl_free(body);
+  return FLOW(r);
+}
+
+static int tcl_cmd_foreach(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  assert(tcl_list_length(args) == 4);
+  tcl_value_t *name = tcl_list_item(args, 1);
+  tcl_value_t *list = tcl_list_item(args, 2);
+  tcl_value_t *body = tcl_list_item(args, 3);
+  int r = FNORMAL;
+  int n = tcl_list_length(list);
+  for (int i = 0; i < n; i++) {
+    tcl_var(tcl, tcl_string(name), tcl_list_item(list, i));
+    r = tcl_eval(tcl, tcl_string(body), tcl_length(body) + 1);
+    if (FLOW(r) != FAGAIN && FLOW(r) != FNORMAL) {
+      assert(FLOW(r) == FBREAK || FLOW(r) == FRETURN || FLOW(r) == FEXIT || FLOW(r) == FERROR);
+      if (FLOW(r) == FBREAK) {
+        r = FNORMAL;
+      }
+      break;
+    }
+  }
+  tcl_free(name);
+  tcl_list_free(list);
   tcl_free(body);
   return FLOW(r);
 }
@@ -2187,6 +2212,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "exit", tcl_cmd_flow, 1, 2, NULL);
   tcl_register(tcl, "expr", tcl_cmd_expr, 1, 0, NULL);
   tcl_register(tcl, "for", tcl_cmd_for, 5, 5, NULL);
+  tcl_register(tcl, "foreach", tcl_cmd_foreach, 4, 4, NULL);
   tcl_register(tcl, "format", tcl_cmd_format, 2, 0, NULL);
   tcl_register(tcl, "global", tcl_cmd_global, 2, 0, NULL);
   tcl_register(tcl, "if", tcl_cmd_if, 3, 0, NULL);
