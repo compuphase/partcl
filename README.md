@@ -48,6 +48,8 @@ builtin command), but that same variable can still be used in string operations.
 
 | name   | Summary |
 | ------ | ------- |
+| append | Append contents to a variable (concatenate strings). |
+| array  | Functions on array variables: `length` (same as `size`), `slice`. |
 | break  | Aborts a loop, jumps to the first instruction following the loop. |
 | continue | Skips the remainder of the loop body, jumps back to the condition of the loop. |
 | exists | The command `exists var` returns 1 if the variable exists, and 0 otherwise. This is `info exists` in standard Tcl. |
@@ -63,7 +65,7 @@ builtin command), but that same variable can still be used in string operations.
 | return | Jumps out of the current command (`proc`), with an optional explicit return value. |
 | scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
 | set    | Assigns value to the variable and/or returns the current variable value. |
-| string | An assortment of string functions: `append`, `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
+| string | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
 | subst  | Performs command and variable substitution in the argument string. |
 | unset  | Clear a variable (removed it completely). |
 | while  | Runs a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
