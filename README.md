@@ -4,7 +4,7 @@ Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
 
 ## Features
 
-* Small, plain C99 code (although now over twice as long than the ~600 lines of the original)
+* Small, plain C99 code (although now roughly four times the length of the ~600 lines of the original)
 * No external dependencies
 * Good test coverage
 * Can be extended with custom Tcl commands
