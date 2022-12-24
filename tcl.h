@@ -198,14 +198,17 @@ typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, tcl_value_t *args, void *user);
  *  \param tcl      The interpreter context.
  *  \param name     The name of the command.
  *  \param fn       The function pointer.
- *  \param arity    The number of parameters of the command, which includes the
- *                  command name itself. Set this to zero for a variable
+ *  \param minargs  The number of parameters of the command, which includes
+ *                  the command name itself. Set this to zero for a variable
+ *                  argument list.
+ *  \param maxargs  The number of parameters of the command, which includes
+ *                  the command name itself. Set this to zero for a variable
  *                  argument list.
  *  \param user     A user value (which is passed to the C function).
  *
  *  \return A pointer to the command structure that was just added.
  */
-struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, int arity, void *user);
+struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, unsigned short minargs, unsigned short maxargs, void *user);
 
 /** tcl_result() sets the result of a C function into the ParTcl environment.
  *  \param tcl      The interpreter context.
