@@ -61,6 +61,7 @@ builtin command), but that same variable can still be used in string operations.
 | global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
 | if     | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
 | incr   | Increments or decrements a variable. |
+| join   | Creates a string from a list, by concatenating elements, with a separator chosen by the user. |
 | lappend | Appends values to a variable (where the variable is presumed to contain a list). |
 | lindex | Returns a specified element from the list. |
 | list   | Creates a list from the values that follow it. |
@@ -71,6 +72,7 @@ builtin command), but that same variable can still be used in string operations.
 | return | Jumps out of the current command (`proc`), with an optional explicit return value. |
 | scan   | Parses a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
 | set    | Assigns value to the variable and/or returns the current variable value. |
+| split  | Creates a list from a string, by splitting the string on a separator chosen by the user. |
 | string | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
 | subst  | Performs command and variable substitution in the argument string. |
 | unset  | Clear a variable (removed it completely). |
