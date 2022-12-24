@@ -491,19 +491,23 @@ static struct tcl_var *tcl_env_var(struct tcl_env *env, const char *name) {
   return var;
 }
 
+static void tcl_var_free_values(struct tcl_var *var) {
+  assert(var && var->value);
+  for (int idx = 0; idx < var->elements; idx++) {
+    if (var->value[idx]) {
+      tcl_free(var->value[idx]);
+    }
+  }
+  free(var->value);
+}
+
 static struct tcl_env *tcl_env_free(struct tcl_env *env) {
   struct tcl_env *parent = env->parent;
   while (env->vars) {
     struct tcl_var *var = env->vars;
     env->vars = env->vars->next;
     tcl_free(var->name);
-    assert(var->value);
-    for (int idx = 0; idx < var->elements; idx++) {
-      if (var->value[idx]) {
-        tcl_free(var->value[idx]);
-      }
-    }
-    free(var->value);
+    tcl_var_free_values(var);
     free(var);
   }
   free(env);
@@ -572,7 +576,7 @@ const tcl_value_t *tcl_var(struct tcl *tcl, const char *name, tcl_value_t *value
     while (newsize <= idx) {
       newsize *= 2;
     }
-    tcl_value_t** newlist = malloc(newsize * sizeof(tcl_value_t*));
+    tcl_value_t **newlist = malloc(newsize * sizeof(tcl_value_t*));
     if (newlist) {
       memset(newlist, 0, newsize * sizeof(tcl_value_t*));
       memcpy(newlist, var->value, var->elements * sizeof(tcl_value_t*));
@@ -1281,6 +1285,97 @@ static int tcl_cmd_exists(struct tcl *tcl, tcl_value_t *args, void *arg) {
   return tcl_int_result(tcl, FNORMAL, result);
 }
 
+static int tcl_cmd_array(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  int nargs = tcl_list_length(args);
+  if (nargs < 3) {  /* need at least "array subcommand var" */
+    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  tcl_value_t *subcmd = tcl_list_item(args, 1);
+  tcl_value_t *name = tcl_list_item(args, 2);
+  int r = FERROR;
+  if (SUBCMD(subcmd, "length") || SUBCMD(subcmd, "size")) {
+    struct tcl_var *var = tcl_findvar(tcl->env, tcl_string(name));
+    if (var && var->global) { /* found local alias of a global variable; find the global */
+      var = tcl_findvar(tcl_global_env(tcl), tcl_string(name));
+    }
+    int count = 0;
+    if (var) {
+      for (int i = 0; i < var->elements; i++) {
+        if (var->value[i]) {
+          count++;
+        }
+      }
+    }
+    r = tcl_int_result(tcl, FNORMAL, count);
+  } else if (SUBCMD(subcmd, "slice")) {
+    if (nargs < 4) {  /* need at least "array slice var blob" */
+      tcl_free(subcmd);
+      tcl_free(name);
+      return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+    }
+    tcl_value_t *blob = tcl_list_item(args, 3);
+    const unsigned char *bptr = tcl_string(blob);
+    size_t blen = tcl_length(blob);
+    tcl_value_t *wsize = (nargs > 4) ? tcl_list_item(args, 4) : NULL;
+    int step = wsize ? tcl_int(wsize) : 1;
+    if (step < 1) {
+      step = 1;
+    }
+    int count = 0;
+    struct tcl_var *var = NULL;
+    while (blen > 0) {
+      /* make value (depending on step size) and convert to string */
+      long value = 0;
+      for (int i = 0; i < step && i < blen; i++) {
+        value |= (long)*(bptr + i) << 8 * i;
+      }
+      char buf[64];
+      char *p = tcl_int2string(buf, sizeof buf, 10, value);
+      if (!var) {
+        /* make the variable (implicitly sets index 0), find it back */
+        tcl_var(tcl, tcl_string(name), tcl_value(p, strlen(p), false));
+        var = tcl_findvar(tcl->env, tcl_string(name));
+        assert(var);            /* if it didn't yet exist, it was just created */
+        if (var->global) {      /* found local alias of a global variable; find the global */
+          var = tcl_findvar(tcl_global_env(tcl), tcl_string(name));
+        }
+        /* can immediately allocate the properly sized value list */
+        int numelements = blen / step + 1;
+        tcl_value_t **newlist = malloc(numelements * sizeof(tcl_value_t*));
+        if (newlist) {
+          memset(newlist, 0, numelements * sizeof(tcl_value_t*));
+          assert(var->elements == 1);
+          newlist[0] = var->value[0];
+          free(var->value);
+          var->value = newlist;
+          var->elements = numelements;
+        } else {
+          tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_MEMORY));
+          count = 0;
+          break;
+        }
+      } else {
+        assert(count < var->elements);
+        var->value[count] = tcl_value(p, strlen(p), false);
+      }
+      count++;
+      bptr += step;
+      blen = (blen > step) ? blen - step : 0;
+    }
+    tcl_free(blob);
+    if (wsize) {
+      tcl_free(wsize);
+    }
+    r = tcl_int_result(tcl, (count > 0) ? FNORMAL : FERROR, count);
+  } else {
+    r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  tcl_free(subcmd);
+  tcl_free(name);
+  return r;
+}
+
 #ifndef TCL_DISABLE_PUTS
 static int tcl_cmd_puts(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
@@ -1968,6 +2063,7 @@ void tcl_init(struct tcl *tcl) {
   tcl->env = tcl_env_alloc(NULL);
   tcl->result = tcl_value("", 0, false);
   tcl_register(tcl, "append", tcl_cmd_append, 0, NULL);
+  tcl_register(tcl, "array", tcl_cmd_array, 0, NULL);
   tcl_register(tcl, "break", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "exists", tcl_cmd_exists, 2, NULL);
