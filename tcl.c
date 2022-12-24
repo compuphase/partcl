@@ -307,7 +307,7 @@ static tcl_value_t *tcl_dup(const tcl_value_t *value) {
   return tcl_value(tcl_string(value), vlen, tcl_binary(value, vlen));
 }
 
-tcl_value_t *tcl_list_alloc(void) {
+tcl_value_t *tcl_list_new(void) {
   return tcl_value("", 0, false);
 }
 
@@ -729,7 +729,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
     tcl->env->errinfo.codebase = string;
     tcl->env->errinfo.codesize = length;
   }
-  tcl_value_t *list = tcl_list_alloc();
+  tcl_value_t *list = tcl_list_new();
   tcl_value_t *cur = NULL;
   int result = FNORMAL;
   bool markposition = true;
@@ -765,7 +765,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
       if (tcl_list_length(list) > 0) {
         result = tcl_exec_cmd(tcl, list);
         tcl_list_free(list);
-        list = tcl_list_alloc();
+        list = tcl_list_new();
       } else {
         result = FNORMAL;
       }
@@ -1376,6 +1376,105 @@ static int tcl_cmd_array(struct tcl *tcl, tcl_value_t *args, void *arg) {
   return r;
 }
 
+static int tcl_cmd_list(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  tcl_value_t *list = tcl_list_new();
+  int n = tcl_list_length(args);
+  for (int i = 1; i < n; i++) {
+    list = tcl_list_append(list, tcl_list_item(args, i));
+  }
+  return tcl_result(tcl, FNORMAL, list);
+}
+
+static int tcl_cmd_concat(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  tcl_value_t *list = tcl_list_new();
+  int n = tcl_list_length(args);
+  for (int i = 1; i < n; i++) {
+    tcl_value_t *sublst = tcl_list_item(args, i);
+    int sublst_len = tcl_list_length(sublst);
+    for (int j = 0; j < sublst_len; j++) {
+      list = tcl_list_append(list, tcl_list_item(sublst, j));
+    }
+    tcl_free(sublst);
+  }
+  return tcl_result(tcl, FNORMAL, list);
+}
+
+static int tcl_cmd_lappend(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  int n = tcl_list_length(args);
+  if (n < 3) {          /* need at least "lappend var value" */
+    return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  tcl_value_t *list = tcl_list_new();
+  /* check whether the value exists */
+  tcl_value_t *name = tcl_list_item(args, 1);
+  struct tcl_var *var = tcl_findvar(tcl->env, tcl_string(name));
+  if (var && var->global) { /* found local alias of a global variable; find the global */
+    var = tcl_findvar(tcl_global_env(tcl), tcl_string(name));
+  }
+  if (var) {
+    /* variable exists, collect the items already in it */
+    tcl_value_t *v_list = tcl_dup(tcl_var(tcl, tcl_string(name), NULL));
+    int v_len = tcl_list_length(v_list);
+    for (int i = 0; i < v_len; i++) {
+      list = tcl_list_append(list, tcl_list_item(v_list, i));
+    }
+    tcl_free(v_list);
+  }
+  /* append other arguments, update the variable */
+  for (int i = 2; i < n; i++) {
+    list = tcl_list_append(list, tcl_list_item(args, i));
+  }
+  tcl_var(tcl, tcl_string(name), tcl_dup(list));
+  tcl_free(name);
+  return tcl_result(tcl, FNORMAL, list);
+}
+
+static int tcl_cmd_llength(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  tcl_value_t *list = tcl_list_item(args, 1);
+  int n = tcl_list_length(list);
+  tcl_free(list);
+  return tcl_int_result(tcl, FNORMAL, n);
+}
+
+static int tcl_cmd_lindex(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  tcl_value_t *list = tcl_list_item(args, 1);
+  tcl_value_t *v_index = tcl_list_item(args, 2);
+  int index = tcl_int(v_index);
+  tcl_free(v_index);
+  int n = tcl_list_length(list);
+  int r = FNORMAL;
+  if (index < n) {
+    r = tcl_result(tcl, FNORMAL, tcl_list_item(list, index));
+  } else {
+    r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
+  tcl_free(list);
+  return r;
+}
+
+static int tcl_cmd_lrange(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  tcl_value_t *list = tcl_list_item(args, 1);
+  int list_len = tcl_list_length(list);
+  tcl_value_t *v_first = tcl_list_item(args, 2);
+  int first = tcl_int(v_first);
+  tcl_free(v_first);
+  tcl_value_t *v_last = tcl_list_item(args, 3);
+  int last = (strcmp(tcl_string(v_last), "end") == 0) ? list_len - 1 : tcl_int(v_last);
+  tcl_free(v_last);
+  tcl_value_t *rangelist = tcl_list_new();
+  for (int i = first; i <= last; i++) {
+    rangelist = tcl_list_append(rangelist, tcl_list_item(list, i));
+  }
+  tcl_free(list);
+  return tcl_result(tcl, FNORMAL, rangelist);
+}
+
 #ifndef TCL_DISABLE_PUTS
 static int tcl_cmd_puts(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
@@ -1431,7 +1530,7 @@ static int tcl_cmd_proc(struct tcl *tcl, tcl_value_t *args, void *arg) {
 }
 
 static tcl_value_t *tcl_make_condition_list(tcl_value_t *cond) {
-  tcl_value_t *list = tcl_list_alloc();
+  tcl_value_t *list = tcl_list_new();
   list = tcl_list_append(list, tcl_value("expr", 4, false));
   list = tcl_list_append(list, cond);
   return list;
@@ -2065,6 +2164,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "append", tcl_cmd_append, 0, NULL);
   tcl_register(tcl, "array", tcl_cmd_array, 0, NULL);
   tcl_register(tcl, "break", tcl_cmd_flow, 1, NULL);
+  tcl_register(tcl, "concat", tcl_cmd_concat, 0, NULL);
   tcl_register(tcl, "continue", tcl_cmd_flow, 1, NULL);
   tcl_register(tcl, "exists", tcl_cmd_exists, 2, NULL);
   tcl_register(tcl, "exit", tcl_cmd_flow, 0, NULL);
@@ -2074,6 +2174,11 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "global", tcl_cmd_global, 0, NULL);
   tcl_register(tcl, "if", tcl_cmd_if, 0, NULL);
   tcl_register(tcl, "incr", tcl_cmd_incr, 0, NULL);
+  tcl_register(tcl, "lappend", tcl_cmd_lappend, 0, NULL);
+  tcl_register(tcl, "list", tcl_cmd_list, 0, NULL);
+  tcl_register(tcl, "lindex", tcl_cmd_lindex, 3, NULL);
+  tcl_register(tcl, "llength", tcl_cmd_llength, 2, NULL);
+  tcl_register(tcl, "lrange", tcl_cmd_lrange, 4, NULL);
   tcl_register(tcl, "proc", tcl_cmd_proc, 4, NULL);
   tcl_register(tcl, "return", tcl_cmd_flow, 0, NULL);
   tcl_register(tcl, "scan", tcl_cmd_scan, 0, NULL);
@@ -2103,7 +2208,18 @@ void tcl_destroy(struct tcl *tcl) {
   memset(tcl, 0, sizeof(struct tcl));
 }
 
-void tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
+const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
+  static const char *msg[] = {
+    /* TCLERR_GENERAL */    "unspecified error",
+    /* TCLERR_SYNTAX */     "syntax error, e.g. unbalanced brackets",
+    /* TCLERR_MEMORY */     "memory allocation error",
+    /* TCLERR_EXPR */       "error in expression",
+    /* TCLERR_CMDUNKNOWN */ "unknown command (mismatch in name or arity)",
+    /* TCLERR_VARUNKNOWN */ "unknown variable name",
+    /* TCLERR_VARNAME */    "invalid variable name (e.g. too long)",
+    /* TCLERR_PARAM */      "incorrect (or missing) parameter to a command",
+    /* TCLERR_SCOPE */      "scope error (e.g. command is allowed in local scope only)",
+  };
   assert(tcl);
   assert(code);
   assert(line);
@@ -2124,6 +2240,8 @@ void tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
     script++;
   }
   *column = global_env->errinfo.currentpos - linebase + 1;
+  assert(global_env->errinfo.errorcode >= 0 && global_env->errinfo.errorcode < sizeof(msg)/sizeof(msg[0]));
+  return msg[global_env->errinfo.errorcode];
 }
 
 const char *tcl_cobs_encode(const char *bindata, size_t *length) {
