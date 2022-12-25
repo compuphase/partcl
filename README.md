@@ -5,10 +5,10 @@ Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
 ## Features
 
 * Small, plain C99 code (although now roughly four times the length of the ~600 lines of the original)
-* No external dependencies
+* No external dependencies, apart from the standard C library.
 * Good test coverage
 * Can be extended with custom Tcl commands
-* Runs well on bare metal embedded MCUs
+* Runs well on bare metal embedded MCUs (malloc()/free() is required, though).
 
 ## Usage
 
@@ -53,7 +53,6 @@ builtin command), but that same variable can still be used in string operations.
 | break  | Aborts a loop, jumps to the first instruction following the loop. |
 | concat | Joins multiple lists into a single list. |
 | continue | Skips the remainder of the loop body, jumps back to the condition of the loop. |
-| exists | The command `exists var` returns 1 if the variable exists, and 0 otherwise. This is `info exists` in standard Tcl. |
 | exit   | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
 | expr   | Interprets the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
 | for    | Runs a loop `for {setup} {condition} {post} {body}`.  One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
@@ -62,12 +61,14 @@ builtin command), but that same variable can still be used in string operations.
 | global | Marks any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
 | if     | Does a simple `if {cond} {then} {cond2} {then2} {else}`. |
 | incr   | Increments or decrements a variable. |
+| info   | Returns some information on the Tcl interpreter, with subcommands `exists` and `tclversion`. Notably, `info exists var` returns 1 if the variable exists, and 0 otherwise. |
 | join   | Creates a string from a list, by concatenating elements, with a separator chosen by the user. |
 | lappend | Appends values to a variable (where the variable is presumed to contain a list). |
 | lindex | Returns a specified element from the list. |
 | list   | Creates a list from the values that follow it. |
 | llength | Returns the number of elements in a list. |
 | lrange | Returns a subset of a source list as a new list. |
+| lreplace | Deletes a range of elements in a list and inserts a new set of elements at that position. | 
 | proc   | Creates a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
 | puts   | Prints argument to the stdout, followed by a newline. This command can be disabled using `#define TCL_DISABLE_PUTS`, which is handy for embedded systems that don't have "stdout". |
 | return | Jumps out of the current command (`proc`), with an optional explicit return value. |
@@ -76,6 +77,7 @@ builtin command), but that same variable can still be used in string operations.
 | split  | Creates a list from a string, by splitting the string on a separator chosen by the user. |
 | string | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
 | subst  | Performs command and variable substitution in the argument string. |
+| switch | Control flow structure, executing a block selected from matching one out of several patterns. |
 | unset  | Clear a variable (removed it completely). |
 | while  | Runs a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 
