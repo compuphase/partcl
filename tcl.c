@@ -30,6 +30,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "fortify.h"
 #include "tcl.h"
 
 
@@ -1598,7 +1599,7 @@ static int tcl_cmd_if(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   int i = 1;
   int n = tcl_list_length(args);
-  int r = FNORMAL;
+  int r = tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
   while (i < n) {
     tcl_value_t *cond = tcl_make_condition_list(tcl_list_item(args, i++));
     tcl_value_t *branch = (i < n) ? tcl_list_item(args, i++) : NULL;
@@ -1652,6 +1653,58 @@ static int tcl_cmd_if(struct tcl *tcl, tcl_value_t *args, void *arg) {
 
   }
   return FLOW(r);
+}
+
+static int tcl_cmd_switch(struct tcl *tcl, tcl_value_t *args, void *arg) {
+  (void)arg;
+  int nargs = tcl_list_length(args);
+  int r = tcl_result(tcl, FNORMAL, tcl_value("", 0, false));
+  tcl_value_t *crit = tcl_list_item(args, 1);
+  /* there are two forms of switch: all pairs in a list, or all pairs simply
+     appended onto the tail of the command */
+  tcl_value_t *list;
+  int list_idx, list_len;
+  if (nargs == 3) {
+    list = tcl_list_item(args, 2);
+    list_idx = 0;
+    list_len = tcl_list_length(list);
+  } else {
+    list = args;
+    list_idx = 2;
+    list_len = nargs;
+  }
+  /* find a match */
+  while (list_idx < list_len) {
+    tcl_value_t *pattern = tcl_list_item(list, list_idx);
+    bool match = (strcmp(tcl_string(pattern), "default") != 0 &&
+                  !tcl_match(tcl_string(pattern), tcl_string(crit), 0, 0));
+    tcl_free(pattern);
+    if (match) {
+      break;
+    }
+    list_idx += 2;  /* skip pattern & body pair */
+  }
+  /* find body */
+  tcl_value_t *body = NULL;
+  list_idx += 1;
+  while (list_idx < list_len) {
+    tcl_value_t *body = tcl_list_item(list, list_idx);
+    if (strcmp(tcl_string(body), "-") != 0)
+      break;
+    body = tcl_free(body);
+    list_idx += 2;  /* body, plus pattern of the next case */
+  }
+  /* clean up values that are no longer needed */
+  tcl_free(crit);
+  if (nargs == 3) {
+    tcl_list_free(list);
+  }
+  /* execute the body */
+  if (body) {
+    r = tcl_eval(tcl, tcl_string(body), tcl_length(body) + 1);
+    tcl_free(body);
+  }
+  return r;
 }
 
 static int tcl_cmd_while(struct tcl *tcl, tcl_value_t *args, void *arg) {
@@ -2282,6 +2335,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "split", tcl_cmd_split, 2, 3, NULL);
   tcl_register(tcl, "string", tcl_cmd_string, 3, 6, NULL);
   tcl_register(tcl, "subst", tcl_cmd_subst, 2, 2, NULL);
+  tcl_register(tcl, "switch", tcl_cmd_switch, 3, 0, NULL);
   tcl_register(tcl, "unset", tcl_cmd_unset, 2, 0, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, 3, NULL);
 #ifndef TCL_DISABLE_PUTS
