@@ -1141,21 +1141,45 @@ static int tcl_cmd_append(struct tcl *tcl, tcl_value_t *args, void *arg) {
 
 #define SUBCMD(v, s)  (strcmp(tcl_string(v), (s)) == 0)
 
-/* source: https://stackoverflow.com/a/23457543 */
-static bool tcl_match(const char *pattern, const char *candidate, int p, int c) {
-  if (pattern[p] == '\0') {
-    return candidate[c] == '\0';
-  } else if (pattern[p] == '*') {
-    for (; candidate[c] != '\0'; c++) {
-      if (tcl_match(pattern, candidate, p+1, c))
-        return true;
+/* source: https://github.com/cacharle/globule */
+static bool tcl_fnmatch(const char *pattern, const char *string) {
+  if (*pattern == '\0')
+    return (*string == '\0');
+  if (*string == '\0')
+    return (strcmp(pattern, "*") == 0);
+  switch (*pattern) {
+  case '*':
+    if (tcl_fnmatch(pattern + 1, string))
+      return true;
+    if (tcl_fnmatch(pattern, string + 1))
+      return true;
+    return (tcl_fnmatch(pattern + 1, string + 1));
+  case '?':
+    return (tcl_fnmatch(pattern + 1, string + 1));
+  case '[':
+    pattern++;
+    bool complement = *pattern == '!';
+    if (complement)
+      pattern++;
+    const char *closing = strchr(pattern + 1, ']') + 1;
+    if (*pattern == *string)  // has to contain at least one character
+      return (!complement ? tcl_fnmatch(closing, string + 1) : false);
+    pattern++;
+    for (; *pattern != ']'; pattern++) {
+      if (pattern[0] == '-' && pattern + 2 != closing) {
+        char range_start = pattern[-1];
+        char range_end = pattern[1];
+        if (*string >= range_start && *string <= range_end)
+          return (!complement ? tcl_fnmatch(closing, string + 1) : false);
+        pattern++;
+      } else if (*pattern == *string)
+        return (!complement ? tcl_fnmatch(closing, string + 1) : false);
     }
-    return tcl_match(pattern, candidate, p+1, c);
-  } else if (pattern[p] != '?' && pattern[p] != candidate[c]) {
-    return false;
-  }  else {
-    return tcl_match(pattern, candidate, p+1, c+1);
+    return (!complement ? false : tcl_fnmatch(closing, string + 1));
   }
+  if (*pattern == *string)
+    return (tcl_fnmatch(pattern + 1, string + 1));
+  return false;
 }
 
 static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
@@ -1244,11 +1268,7 @@ static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
         r = tcl_result(tcl, FNORMAL, tcl_value(tcl_string(arg1) + pos, 1, false));
       }
     } else if (SUBCMD(subcmd, "match")) {
-      if (tcl_length(arg1) == 0 || (tcl_length(arg2) == 0 && strcmp(tcl_string(arg1), "*") != 0)) {
-        r = tcl_int_result(tcl, FNORMAL, 0);
-      } else {
-        r = tcl_int_result(tcl, FNORMAL, tcl_match(tcl_string(arg1), tcl_string(arg2), 0, 0));
-      }
+      r = tcl_int_result(tcl, FNORMAL, tcl_fnmatch(tcl_string(arg1), tcl_string(arg2)));
     } else if (SUBCMD(subcmd, "range")) {
       int first = tcl_int(arg2);
       if (first < 0) {
@@ -1727,8 +1747,8 @@ static int tcl_cmd_switch(struct tcl *tcl, tcl_value_t *args, void *arg) {
   /* find a match */
   while (list_idx < list_len) {
     tcl_value_t *pattern = tcl_list_item(list, list_idx);
-    bool match = (strcmp(tcl_string(pattern), "default") != 0 &&
-                  !tcl_match(tcl_string(pattern), tcl_string(crit), 0, 0));
+    bool match = (strcmp(tcl_string(pattern), "default") == 0 ||
+                  tcl_fnmatch(tcl_string(pattern), tcl_string(crit)));
     tcl_free(pattern);
     if (match) {
       break;
@@ -2408,7 +2428,7 @@ void tcl_destroy(struct tcl *tcl) {
   memset(tcl, 0, sizeof(struct tcl));
 }
 
-const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
+const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line) {
   static const char *msg[] = {
     /* TCLERR_GENERAL */    "unspecified error",
     /* TCLERR_SYNTAX */     "syntax error (e.g. unbalanced braces)",
@@ -2423,7 +2443,6 @@ const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
   assert(tcl);
   assert(code);
   assert(line);
-  assert(column);
   struct tcl_env *global_env = tcl_global_env(tcl);
   *code = global_env->errinfo.errorcode;
   *line = 1;
@@ -2439,7 +2458,6 @@ const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
     }
     script++;
   }
-  *column = global_env->errinfo.currentpos - linebase + 1;
   assert(global_env->errinfo.errorcode >= 0 && global_env->errinfo.errorcode < sizeof(msg)/sizeof(msg[0]));
   return msg[global_env->errinfo.errorcode];
 }

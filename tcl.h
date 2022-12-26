@@ -47,11 +47,10 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length);
  *  \param tcl      The interpreter context.
  *  \param code     [out] The error code.
  *  \param line     [out] The line number (1-based).
- *  \param column   [out] The column number (1-based).
  *
  *  \return A pointer to a message describing the error code.
  */
-const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column);
+const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line);
 enum {
   TCLERR_GENERAL,     /**< unspecified error */
   TCLERR_SYNTAX,      /**< syntax error, e.g. unbalanced brackets */
