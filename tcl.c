@@ -699,7 +699,7 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
         int baselen = start - tcl_string(name);
         tcl_subst(tcl, start, end - start);
         tcl_free(name);
-        name = tcl_value(string + 1, baselen, false);  /* includes opening '(' */
+        name = tcl_value(string, baselen, false);  /* includes opening '(' */
         name = tcl_append(name, tcl_dup(tcl->result));
         name = tcl_append(name, tcl_value(")", 1, false));
       }
@@ -1161,7 +1161,7 @@ static bool tcl_match(const char *pattern, const char *candidate, int p, int c) 
 static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   int nargs = tcl_list_length(args);
-  int r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  int r = FERROR;
   tcl_value_t *subcmd = tcl_list_item(args, 1);
   tcl_value_t *arg1 = tcl_list_item(args, 2);
   if (SUBCMD(subcmd, "length")) {
@@ -1295,6 +1295,9 @@ static int tcl_cmd_string(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
   tcl_free(subcmd);
   tcl_free(arg1);
+  if (FLOW(r) == FERROR) {
+    r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
   return r;
 }
 
@@ -1302,7 +1305,7 @@ static int tcl_cmd_info(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   int nargs = tcl_list_length(args);
   tcl_value_t *subcmd = tcl_list_item(args, 1);
-  int r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  int r = FERROR;
   if (SUBCMD(subcmd, "exists")) {
     if (nargs >= 3) {
       tcl_value_t *name = tcl_list_item(args, 2);
@@ -1313,6 +1316,9 @@ static int tcl_cmd_info(struct tcl *tcl, tcl_value_t *args, void *arg) {
     r = tcl_result(tcl, FNORMAL, tcl_value("1.0", 3, false));
   }
   tcl_free(subcmd);
+  if (FLOW(r) == FERROR) {
+    r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
   return r;
 }
 
@@ -1321,7 +1327,7 @@ static int tcl_cmd_array(struct tcl *tcl, tcl_value_t *args, void *arg) {
   int nargs = tcl_list_length(args);
   tcl_value_t *subcmd = tcl_list_item(args, 1);
   tcl_value_t *name = tcl_list_item(args, 2);
-  int r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  int r = FERROR;
   if (SUBCMD(subcmd, "length") || SUBCMD(subcmd, "size")) {
     struct tcl_var *var = tcl_findvar(tcl->env, tcl_string(name));
     if (var && var->global) { /* found local alias of a global variable; find the global */
@@ -1401,6 +1407,9 @@ static int tcl_cmd_array(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
   tcl_free(subcmd);
   tcl_free(name);
+  if (FLOW(r) == FERROR) {
+    r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_PARAM));
+  }
   return r;
 }
 
@@ -1613,14 +1622,15 @@ static int tcl_user_proc(struct tcl *tcl, tcl_value_t *args, void *arg) {
   tcl->env = tcl_env_free(tcl->env);
   tcl_free(params);
   tcl_free(body);
-  return r;
+  assert(FLOW(r) != FBREAK && FLOW(r) != FAGAIN);
+  return (FLOW(r) == FRETURN) ? FNORMAL : FLOW(r);
 }
 
 static int tcl_cmd_proc(struct tcl *tcl, tcl_value_t *args, void *arg) {
   (void)arg;
   tcl_value_t *name = tcl_list_item(args, 1);
   tcl_value_t *arglist = tcl_list_item(args, 2);
-  unsigned argcount = tcl_list_length(arglist);
+  unsigned argcount = tcl_list_length(arglist) + 1; /* include proc name in count */
   struct tcl_cmd *cmd = tcl_register(tcl, tcl_string(name), tcl_user_proc, argcount, argcount, tcl_dup(args));
   tcl_free(name);
   tcl_free(arglist);
@@ -2401,7 +2411,7 @@ void tcl_destroy(struct tcl *tcl) {
 const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, int *column) {
   static const char *msg[] = {
     /* TCLERR_GENERAL */    "unspecified error",
-    /* TCLERR_SYNTAX */     "syntax error, e.g. unbalanced braces",
+    /* TCLERR_SYNTAX */     "syntax error (e.g. unbalanced braces)",
     /* TCLERR_MEMORY */     "memory allocation error",
     /* TCLERR_EXPR */       "error in expression",
     /* TCLERR_CMDUNKNOWN */ "unknown command (mismatch in name or argument count)",
