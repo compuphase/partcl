@@ -41,20 +41,28 @@ void tcl_destroy(struct tcl *tcl);
  */
 int tcl_eval(struct tcl *tcl, const char *string, size_t length);
 
-/** tcl_errorpos() returns the (approximate) line & column number of the
- *  error.
+/** tcl_errorpos() returns the error code/message and the (approximate) line
+ *  number of the error. The error information is cleared after this call.
  *
  *  \param tcl      The interpreter context.
- *  \param code     [out] The error code.
- *  \param line     [out] The line number (1-based).
+ *  \param code     [out] The error code. This parameter may be set to NULL.
+ *  \param line     [out] The line number (1-based). This parameter may be set
+ *                  to NULL.
+ *  \param symbol   [out] May contain extra information on the error (such as
+ *                  the name of a proc or variable). This parameter may be set
+ *                  to NULL.
+ *  \param symsize  The size of the buffer for "symbol". Should be set to 0 if
+ *                  "symbol" is NULL.
  *
- *  \return A pointer to a message describing the error code.
+ *  \return A pointer to a message describing the error code. It returns NULL if
+ *          no error information is available.
  */
-const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line);
+const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, char *symbol, size_t symsize);
 enum {
   TCLERR_GENERAL,     /**< unspecified error */
-  TCLERR_SYNTAX,      /**< syntax error, e.g. unbalanced brackets */
   TCLERR_MEMORY,      /**< memory allocation error */
+  TCLERR_SYNTAX,      /**< general syntax error */
+  TCLERR_BRACES,      /**< unbalanced curly braces */
   TCLERR_EXPR,        /**< error in expression */
   TCLERR_CMDUNKNOWN,  /**< unknown command (mismatch in name or arity) */
   TCLERR_VARUNKNOWN,  /**< unknown variable name */
@@ -79,23 +87,38 @@ enum {
   TCLTYPE_EMPTY,
   TCLTYPE_STRING,
   TCLTYPE_INT,
-  TCLTYPE_BLOB,
 };
 
-/** tcl_string() returns a pointer to the start of the contents of a value. If
- ** the value is binary blob, it returns a pointer to the start of the raw data.
+/** tcl_string() returns a pointer to the start of the contents of a value.
  *  \param v        The value.
  *
  *  \return A pointer to the buffer.
  */
 const char *tcl_string(const tcl_value_t *v);
 
-/** tcl_length() returns the length of the contents of the value in bytes.
+/** tcl_length() returns the length of the contents of the value in characters.
+ *
  *  \param v        The value.
  *
- *  \return The number of bytes in the buffer of the value.
+ *  \return The number of characters in the buffer of the value.
+ *
+ *  \note This function does _not_ check for escaped characters.
  */
 size_t tcl_length(const tcl_value_t *v);
+
+/** tcl_length_esc() returns the length of the contents of the value in
+ *  characters, counting escaped characters as 1 (an escaped character is
+ *  physically encoded as 2 bytes).
+ *
+ *  \param v        The value.
+ *
+ *  \return The number of characters in the buffer of the value.
+ *
+ *  \note The returned value is always smaller than, or equal to the value
+ *        returned by tcl_length(). When the return value of this function
+ *        differs from tcl_length(), the value has escaped characters.
+ */
+size_t tcl_length_esc(const tcl_value_t *v);
 
 /** tcl_int() returns the value of a variable after parsing it as an integer
  *  value. The function supports decimal, octal and dexadecimal notation.
@@ -108,16 +131,12 @@ long tcl_int(const tcl_value_t *v);
 /** tcl_value() creates a value from a C string or data block.
  *  \param data     The contents to store in the value.
  *  \param len      The length of the data.
- *  \param binary   If true, the contents of "data" is considered a binary blob
  *
  *  \return A pointer to the created value.
  *
  *  \note The value should be deleted with tcl_free().
- *
- *  \note Even if parameter "binary" is false, the data block may be stored as
- *        binary, based on its contents.
  */
-tcl_value_t *tcl_value(const char *data, size_t len, bool binary);
+tcl_value_t *tcl_value(const char *data, size_t len);
 
 /** tcl_free() deallocates a value or a list.
  *  \param v          The value.
