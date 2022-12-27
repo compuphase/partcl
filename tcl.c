@@ -731,10 +731,9 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
 
 static struct tcl_cmd *tcl_lookup_cmd(struct tcl *tcl, tcl_value_t *name, unsigned numargs) {
   assert(name);
-  assert(numargs > 0);
   for (struct tcl_cmd *cmd = tcl->cmds; cmd != NULL; cmd = cmd->next) {
     if (strcmp(tcl_string(name), tcl_string(cmd->name)) == 0 &&
-        (cmd->minargs <= numargs && numargs <= cmd->maxargs)) {
+        (numargs == 0 || (cmd->minargs <= numargs && numargs <= cmd->maxargs))) {
       return cmd;
     }
   }
@@ -884,19 +883,23 @@ static int tcl_cmd_global(struct tcl *tcl, tcl_value_t *args, void *arg) {
   }
   int r = FNORMAL;
   int n = tcl_list_length(args);
-  for (int i = 1; i < n; i++) {
+  for (int i = 1; i < n && FLOW(r) != FERROR; i++) {
     tcl_value_t *name = tcl_list_item(args, i);
     assert(name);
-    if (tcl_findvar(tcl->env, name) != NULL) {
+    if (tcl_findvar(tcl->env, tcl_string(name)) != NULL) {
       /* name exists locally, cannot create an alias with the same name */
       r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARNAME), name);
-    } else if (tcl_findvar(tcl_global_env(tcl), name) == NULL) {
-      /* name not known as a global */
-      r = tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARUNKNOWN), name);
     } else {
+      if (tcl_findvar(tcl_global_env(tcl), tcl_string(name)) == NULL) {
+        /* name not known as a global, create it first */
+        struct tcl_env *save_env = tcl->env;
+        tcl->env = tcl_global_env(tcl);
+        tcl_var(tcl, tcl_string(name), tcl_value("", 0));
+        tcl->env = save_env;
+      }
       /* make local, find it back, mark it as an alias for a global */
       tcl_var(tcl, tcl_string(name), tcl_value("", 0));  /* make local */
-      struct tcl_var *var = tcl_findvar(tcl->env, name);
+      struct tcl_var *var = tcl_findvar(tcl->env, tcl_string(name));
       if (var) {
         var->global = true;
       }
@@ -2257,12 +2260,12 @@ static long expr_logic_or(struct expr *expr) {
 }
 
 static long expr_conditional(struct expr *expr) {
-  long v1 = expr_conditional(expr);
-  while (lex(expr) == '?') {
+  long v1 = expr_logic_or(expr);
+  if (lex(expr) == '?') {
     long v2 = expr_conditional(expr);
     if (lex(expr) != ':')
       expr_error(expr, eINVALID_CHAR);
-    long v3 = expr_conditional(expr);
+    long v3 = expr_logic_or(expr);
     v1 = v1 ? v2 : v3;
   }
   unlex(expr);
@@ -2276,7 +2279,7 @@ static int tcl_expression(struct tcl *tcl, const char *expression, long *result)
   expr.pos = expression;
   expr.tcl = tcl;
   expr_skip(&expr, 0);            /* erase leading white space */
-  *result = expr_logic_or(&expr);
+  *result = expr_conditional(&expr);
   expr_skip(&expr, 0);            /* erase trailing white space */
   if (expr.error == eNONE) {
     int op = lex(&expr);
