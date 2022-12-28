@@ -37,7 +37,7 @@ SOFTWARE.
 #define BIN_ESC         '\x1e'
 
 /* Token type and control flow constants */
-enum { TERROR, TEXECPOINT, TFIELD, TPART };
+enum { TERROR, TEXECPOINT, TFIELD, TPART, TDONE };
 enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN, FEXIT };
 
 #define MARKFLOW(f, e)  ((f) | ((e) << 8))
@@ -55,9 +55,8 @@ static bool tcl_is_operator(char c) {
           c == '/' || c == '%' || c == '?' || c == ':');
 }
 
-static bool tcl_is_special(char c, bool quote, bool isvar) {
-  return (c == '[' || c == ']' || c == '"' || c == '\\' || c == '\0' ||
-          (!isvar && c == '$') ||
+static bool tcl_is_special(char c, bool quote) {
+  return (c == '[' || c == ']' || c == '"' || c == '\\' || c == '\0' || c == '$' ||
           (!quote && (c == '{' || c == '}' || c == ';' || c == '\r' || c == '\n')) );
 }
 
@@ -76,6 +75,10 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
   /* Skip leading spaces if not quoted */
   for (; !quote && length > 0 && tcl_is_space(*string); string++, length--)
     {}
+  if (length == 0) {
+    *from = *to = string;
+    return TDONE;
+  }
   /* Skip comment (then skip leading spaces again */
   if (*string == '#' && !(*flags & LEX_NO_CMT)) {
     assert(!quote); /* this flag cannot be set, if the "no-comment" flag is set */
@@ -95,12 +98,16 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
   }
 
   if (*string == '$') { /* Variable token, must not start with a space or quote */
+    int deref = 1;
+    while (string[deref] == '$' && !(*flags & LEX_VAR)) {  /* double deref */
+      deref++;
+    }
     if (tcl_is_space(string[1]) || string[1] == '"' || (*flags & LEX_VAR)) {
       return TERROR;
     }
     unsigned saved_flags = *flags;
     *flags = (*flags & ~LEX_QUOTE) | LEX_VAR; /* quoting is off, variable name parsing is on */
-    int r = tcl_next(string + 1, length - 1, to, to, flags);
+    int r = tcl_next(string + deref, length - deref, to, to, flags);
     *flags = saved_flags;
     return (r == TFIELD && quote) ? TPART : r;
   }
@@ -136,10 +143,28 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
     i = (length >= 4 && *(string + 1) == 'x') ? 4 : 2;
   } else {
     bool isvar = ((*flags & LEX_VAR) != 0);
-    while (i < length &&                                /* run until string completed... */
-           (quote || !tcl_is_space(string[i])) &&       /* ... and no whitespace (unless quoted) ... */
-           !(isvar && tcl_is_operator(string[i])) &&    /* ... and no operator in variable mode ... */
-           !tcl_is_special(string[i], quote, isvar)) {  /* ... and no special characters (where "special" depends on quote status) */
+    bool array_close = false;
+    while (i < length && !array_close &&              /* run until string completed... */
+           (quote || !tcl_is_space(string[i])) &&     /* ... and no whitespace (unless quoted) ... */
+           !(isvar && tcl_is_operator(string[i])) &&  /* ... and no operator in variable mode ... */
+           !tcl_is_special(string[i], quote)) {       /* ... and no special characters (where "special" depends on quote status) */
+      if (string[i] == '(' && !quote && isvar) {
+        for (i = 1, depth = 0; i < length; i++) {
+          if (string[i] == '\\' && i+1 < length && (string[i+1] == '(' || string[i+1] == ')')) {
+            i++;  /* escaped brace/bracket, skip both '\' and the character that follows it */
+          } else if (string[i] == '(') {
+            depth++;
+          } else if (string[i] == ')') {
+            if (--depth == 0)
+              break;
+          }
+        }
+        if (string[i] == ')') {
+          array_close = true;
+        } else {
+          i--;
+        }
+      }
       i++;
     }
   }
@@ -359,7 +384,7 @@ tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail) {
   extrasz += taillen;
   if (taillen > 0) {
     for (const char *p = tcl_string(tail); *p && !quote; p++) {
-      if (tcl_is_space(*p) || tcl_is_special(*p, false, false)) {
+      if (tcl_is_space(*p) || tcl_is_special(*p, false)) {
         quote = true;
       }
     }
@@ -652,6 +677,14 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
       return tcl_error_result(tcl, MARKFLOW(FERROR, TCLERR_VARNAME), string + 1);
     }
     string += 1; len -= 1;      /* skip '$' */
+    if (*string == '$') {
+      int r = tcl_subst(tcl, string, len);
+      if (r != FNORMAL) {
+        return r;
+      }
+      string = tcl_string(tcl->result);
+      len = tcl_length(tcl->result);
+    }
     if (*string == '{' && len > 1 && string[len - 1] == '}') {
       string += 1; len -= 2;    /* remove one layer of braces */
     }
@@ -796,7 +829,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
         tcl_list_free(list);
         list = tcl_list_new();
       } else {
-        result = FNORMAL;
+        result = tcl_result(tcl, FNORMAL, tcl_value("", 0));
       }
       markposition = true;
       break;
@@ -2043,7 +2076,7 @@ static int expr_lex(struct expr *expr) {
     int i = 0;
     while (i < sizeof(name) - 1 && *expr->pos != close && *expr->pos != '(' && *expr->pos != ')'
            && (quote || !tcl_is_space(*expr->pos))  && !tcl_is_operator(*expr->pos)
-           && !tcl_is_special(*expr->pos, false, false)) {
+           && !tcl_is_special(*expr->pos, false)) {
       name[i++] = *expr->pos++;
     }
     name[i] = '\0';
@@ -2475,6 +2508,7 @@ const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, char *symbol, s
     return NULL;
   }
   if (line) {
+    *line = 1;
     const char *linebase = script;
     while (script < global_env->errinfo.currentpos) {
       if (*script == '\r' || *script == '\n') {
