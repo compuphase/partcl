@@ -8,9 +8,11 @@ static void check_eval(struct tcl *tcl, const char *s, char *expected) {
     tcl_init(&tmp);
     tcl = &tmp;
     destroy = 1;
+  } else {
+    tcl_errorinfo(tcl, NULL, NULL, NULL, 0);  /* make sure to clear error info. */
   }
   if (tcl_eval(tcl, s, strlen(s) + 1) == FERROR) {
-    FAIL("eval returned error: %s, (%s)\n", tcl_string(tcl->result), s);
+    FAIL("eval returned error: %s, (%s)\n", tcl_errorinfo(tcl, NULL, NULL, NULL, 0), s);
   } else if (strcmp(tcl_string(tcl->result), expected) != 0) {
     FAIL("Expected %s, but got %s. (%s)\n", expected, tcl_string(tcl->result),
          s);
@@ -34,13 +36,13 @@ static void test_subst() {
   check_eval(NULL, "subst {hello world}", "hello world");
   check_eval(NULL, "subst {hello {world}}", "hello {world}");
 
-  check_eval(NULL, "subst $foo", "");
+  //check_eval(NULL, "subst $foo", ""); // TR: this fails because using a variable before it is set, is now an error
 
   struct tcl tcl;
   tcl_init(&tcl);
-  tcl_var(&tcl, "foo", tcl_alloc("bar", 3));
-  tcl_var(&tcl, "bar", tcl_alloc("baz", 3));
-  tcl_var(&tcl, "baz", tcl_alloc("Hello", 5));
+  tcl_var(&tcl, "foo", tcl_value("bar", 3));
+  tcl_var(&tcl, "bar", tcl_value("baz", 3));
+  tcl_var(&tcl, "baz", tcl_value("Hello", 5));
   check_eval(&tcl, "subst $foo", "bar");
   check_eval(&tcl, "subst $foo[]$foo", "barbar");
   check_eval(&tcl, "subst $$foo", "baz");

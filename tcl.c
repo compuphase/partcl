@@ -102,7 +102,7 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
     while (string[deref] == '$' && !(*flags & LEX_VAR)) {  /* double deref */
       deref++;
     }
-    if (tcl_is_space(string[1]) || string[1] == '"' || (*flags & LEX_VAR)) {
+    if (tcl_is_space(string[deref]) || string[deref] == '"' || (*flags & LEX_VAR)) {
       return TERROR;
     }
     unsigned saved_flags = *flags;
@@ -164,6 +164,8 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
         } else {
           i--;
         }
+      } else if (string[i] == ')' && !quote && isvar) {
+        break;
       }
       i++;
     }
@@ -687,6 +689,15 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
     }
     if (*string == '{' && len > 1 && string[len - 1] == '}') {
       string += 1; len -= 2;    /* remove one layer of braces */
+    } else if (*string == '[' && len > 1 && string[len - 1] == ']') {
+      tcl_value_t *expr = tcl_append_string(NULL, string + 1, len - 2);
+      int r = tcl_eval(tcl, tcl_string(expr), tcl_length(expr) + 1);
+      tcl_free(expr);
+      if (r != FNORMAL) {
+        return r;
+      }
+      string = tcl_string(tcl->result);
+      len = tcl_length(tcl->result);
     }
     tcl_value_t *name = tcl_value(string, len);
     /* check for a variable index (arrays) */
@@ -793,7 +804,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
   }
   tcl_value_t *list = tcl_list_new();
   tcl_value_t *cur = NULL;
-  int result = FNORMAL;
+  int result = tcl_result(tcl, FNORMAL, tcl_value("", 0));  /* preset to empty result */
   bool markposition = true;
   tcl_each(string, length, 1) {
     if (markposition) {
@@ -824,12 +835,13 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
       cur = tcl_append(cur, part);
       break;
     case TEXECPOINT:
+    case TDONE:
       if (tcl_list_length(list) > 0) {
         result = tcl_exec_cmd(tcl, list);
         tcl_list_free(list);
         list = tcl_list_new();
       } else {
-        result = tcl_result(tcl, FNORMAL, tcl_value("", 0));
+        result = FNORMAL;
       }
       markposition = true;
       break;
@@ -2503,11 +2515,10 @@ const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, char *symbol, s
       global_env->errinfo.symbol = NULL;
     }
   }
+  assert(global_env->errinfo.errorcode >= 0 && global_env->errinfo.errorcode < sizeof(msg)/sizeof(msg[0]));
+  const char *errmsg = msg[global_env->errinfo.errorcode];
   const char *script = global_env->errinfo.codebase;
-  if (script == NULL) {
-    return NULL;
-  }
-  if (line) {
+  if (line && script) {
     *line = 1;
     const char *linebase = script;
     while (script < global_env->errinfo.currentpos) {
@@ -2521,8 +2532,6 @@ const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, char *symbol, s
       script++;
     }
   }
-  assert(global_env->errinfo.errorcode >= 0 && global_env->errinfo.errorcode < sizeof(msg)/sizeof(msg[0]));
-  const char *errmsg = msg[global_env->errinfo.errorcode];
   memset(&global_env->errinfo, 0, sizeof(struct tcl_errinfo));
   return errmsg;
 }

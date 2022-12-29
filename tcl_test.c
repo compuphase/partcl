@@ -1,6 +1,5 @@
 #include <stdio.h>
 
-#define TEST
 #include "tcl.c"
 
 int status = 0;
