@@ -4,11 +4,11 @@ Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
 
 ## Features
 
-* Small, plain C99 code (although now roughly four times the length of the ~600 lines of the original)
+* Easily embeddable, plain C99 code (one C file, one H file).
 * No external dependencies, apart from the standard C library.
-* Good test coverage
-* Can be extended with custom Tcl commands
-* Runs well on bare metal embedded MCUs (malloc()/free() is required, though).
+* Good test coverage.
+* Flexible and easy-to-use interface to C/C++ programs, can be extended with custom Tcl commands.
+* Runs well on bare metal embedded MCUs (though, dynamic memory allocation of some kind, &agrave;-la malloc() &amp; free(), is required).
 
 ## Usage
 
@@ -20,9 +20,9 @@ tcl_init(&tcl);
 if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
     printf("Result: %.*s\n", tcl_length(tcl.result), tcl_string(tcl.result));
 } else {
-    int code, line, column;
-    const char *msg = tcl_errorpos(&tcl, &code, &line, &column);
-    printf("Error [%d] %s near line %d, column %d\n", code, msg, line, column);
+    int code, line;
+    const char *msg = tcl_errorpos(&tcl, &code, &line, NULL, 0);
+    printf("Error [%d] %s on or after line %d\n", code, msg, line);
 }
 tcl_destroy(&tcl);
 ```
@@ -78,7 +78,7 @@ builtin command), but that same variable can still be used in string operations.
 | string | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
 | subst  | Performs command and variable substitution in the argument string. |
 | switch | Control flow structure, executing a block selected from matching one out of several patterns. |
-| unset  | Clear a variable (removed it completely). |
+| unset  | Clear a variable (remove it completely). |
 | while  | Runs a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 
 ## Operator table
@@ -108,18 +108,18 @@ These are the operators that can be used in the parameter of the `expr` command.
 Any symbol can be part of the word, except for the following special symbols:
 
 * whitespace, tab - used to delimit words
-* `\r`, `\n`, semicolon or EOF (zero-terminator) - used to delimit commands
+* `\r`, `\n`, semicolon or EOS (zero-terminator) - used to delimit commands
 * Braces, square brackets, dollar sign - used for substitution and grouping
 
 ParTcl has special helper functions for these char classes:
 
 ```
-static int tcl_is_space(char c);
-static int tcl_is_end(char c);
-static int tcl_is_special(char c, int q);
+static bool tcl_is_space(char c);
+static bool tcl_is_end(char c);
+static bool tcl_is_special(char c, bool quote);
 ```
 
-`tcl_is_special` behaves differently depending on the quoting mode (`q`
+`tcl_is_special` behaves differently depending on the quoting mode (`quote`
 parameter). Inside a quoted string braces, semicolon and end-of-line symbols
 lose their special meaning and become regular printable characters.
 
@@ -131,7 +131,7 @@ int tcl_next(const char *list, size_t length, const char **from, const char **to
 
 `tcl_next` function finds the next token in the string `list`. Paramters `from` and `to` are
 set to point to the token start/end. Parameter `flags` holds flags for the quoting mode
-(toggled if `"` is met), and flags whether a comment is allowed (and must be gobbled), plus
+(toggled if `"` is met), and marks whether a comment is allowed (and must be gobbled), plus
 other(s). When calling the lexer from your own code, `flags` should be initialized to `0`.
 
 A special macro `tcl_each(s, len, skip_error)` can used to iterate over all the
@@ -162,14 +162,14 @@ int tcl_int(tcl_value_t *v);
 const char *tcl_string(tcl_value_t *v);
 
 /* List values */
-tcl_value_t *tcl_list_alloc();
+tcl_value_t *tcl_list_new();
 tcl_value_t *tcl_list_append(tcl_value_t *v, tcl_value_t *tail);
-tcl_value_t *tcl_list_at(tcl_value_t *v, int index);
+tcl_value_t *tcl_list_item(tcl_value_t *v, int index);
 int tcl_list_length(tcl_value_t *v);
 void tcl_list_free(tcl_value_t *v);
 ```
 
-Keep in mind, that `..._append()` functions must free the tail argument.
+Keep in mind, that `..._append()` functions free the tail argument.
 Also, the string returned by `tcl_string()` it not meant to be mutated or
 cached.
 
@@ -177,17 +177,6 @@ In the default implementation lists are implemented as raw strings that add
 some escaping (braces) around each item. It's a simple solution that also
 reduces the code, but in some exotic cases the escaping can become wrong and
 invalid results will be returned.
-
-When creating a value with `tcl_value`, the block of data to initialize the
-value may be marked as "binary". For a binary block is "quoted" in a special
-way, such that it may contain embedded zeroes or any other kind of bytes.
-If the `data` parameter of `tcl_value` has embedded zeroes, it will automatically
-by marked as binary, but the zero byte is not the only problematic character that
-may occur in a binary block. Therefore, if you pass binary data to `tcl_value`,
-set `binary` to `true`.
-
-When appending values to one another with `tcl_append`, if either block is marked 
-as binary, both are joined in binary mode.
 
 ## Environments
 
@@ -199,7 +188,7 @@ There are only 3 functions related to the environment. One creates a new environ
 another seeks for a variable (or creates a new one), the last one destroys the environment 
 and all its variables.
 
-These functions use malloc/free, but can easily be rewritten to use memory pools instead.
+These functions use malloc()/free(), but can easily be rewritten to use memory pools instead.
 
 ```
 static struct tcl_env *tcl_env_alloc(struct tcl_env *parent);
@@ -260,5 +249,4 @@ style. Please run it for pull requests, too.
 
 Code is distributed under MIT license, feel free to use it in your proprietary
 projects as well.
-
 
