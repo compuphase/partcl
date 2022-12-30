@@ -3,14 +3,15 @@
 
 #include <stdbool.h>
 
-struct tcl_env;
-struct tcl_cmd;
-typedef char tcl_value_t;
+struct tcl_value;
+struct tcl;
+struct tcl_value;
 struct tcl {
   struct tcl_env *env;
   struct tcl_cmd *cmds;
-  tcl_value_t *result;
+  struct tcl_value *result;
 };
+
 
 
 /* =========================================================================
@@ -18,6 +19,7 @@ struct tcl {
    ========================================================================= */
 
 /** tcl_init() initializes the interpreter context.
+ *
  *  \param tcl      The interpreter context.
  */
 void tcl_init(struct tcl *tcl);
@@ -28,6 +30,7 @@ void tcl_init(struct tcl *tcl);
 void tcl_destroy(struct tcl *tcl);
 
 /** tcl_eval() runs a script stored in a memory buffer.
+ *
  *  \param tcl      The interpreter context.
  *  \param string   The buffer with the script (or part of a script).
  *  \param length   The length of the buffer.
@@ -40,6 +43,13 @@ void tcl_destroy(struct tcl *tcl);
  *        value with `tcl_string`.
  */
 int tcl_eval(struct tcl *tcl, const char *string, size_t length);
+
+/** tcl_return() returns the result of the script execution (the "return" value
+ *  of the script). This data is only valid if tcl_eval() returned success.
+ *
+ *  \param tcl      The interpreter context.
+ */
+struct tcl_value *tcl_return(struct tcl *tcl);
 
 /** tcl_errorpos() returns the error code/message and the (approximate) line
  *  number of the error. The error information is cleared after this call.
@@ -76,25 +86,21 @@ enum {
     Values & lists
    ========================================================================= */
 
-/** tcl_type() returns the type of a value. Note that integers can also be
- *  accessed as strings in Tcl.
+/** tcl_isnumber() returns whether the value of the parameter is a valid integer
+ *  number. Note that integers can also be accessed as strings in Tcl.
+ *
  *  \param v        The value.
  *
  *  \return The detected value.
  */
-int tcl_type(const tcl_value_t *v);
-enum {
-  TCLTYPE_EMPTY,
-  TCLTYPE_STRING,
-  TCLTYPE_INT,
-};
+bool tcl_isnumber(const struct tcl_value *v);
 
 /** tcl_string() returns a pointer to the start of the contents of a value.
  *  \param v        The value.
  *
  *  \return A pointer to the buffer.
  */
-const char *tcl_string(const tcl_value_t *v);
+const char *tcl_data(const struct tcl_value *v);
 
 /** tcl_length() returns the length of the contents of the value in characters.
  *
@@ -104,29 +110,16 @@ const char *tcl_string(const tcl_value_t *v);
  *
  *  \note This function does _not_ check for escaped characters.
  */
-size_t tcl_length(const tcl_value_t *v);
+size_t tcl_length(const struct tcl_value *v);
 
-/** tcl_length_esc() returns the length of the contents of the value in
- *  characters, counting escaped characters as 1 (an escaped character is
- *  physically encoded as 2 bytes).
- *
- *  \param v        The value.
- *
- *  \return The number of characters in the buffer of the value.
- *
- *  \note The returned value is always smaller than, or equal to the value
- *        returned by tcl_length(). When the return value of this function
- *        differs from tcl_length(), the value has escaped characters.
- */
-size_t tcl_length_esc(const tcl_value_t *v);
-
-/** tcl_int() returns the value of a variable after parsing it as an integer
+/** tcl_number() returns the value of a variable after parsing it as an integer
  *  value. The function supports decimal, octal and dexadecimal notation.
+ *
  *  \param v        The value.
  *
  *  \return The numeric value of the parameter, or 0 on error.
  */
-long tcl_int(const tcl_value_t *v);
+long long tcl_number(const struct tcl_value *v);
 
 /** tcl_value() creates a value from a C string or data block.
  *  \param data     The contents to store in the value.
@@ -136,29 +129,29 @@ long tcl_int(const tcl_value_t *v);
  *
  *  \note The value should be deleted with tcl_free().
  */
-tcl_value_t *tcl_value(const char *data, size_t len);
+struct tcl_value *tcl_value(const char *data, size_t len);
 
 /** tcl_free() deallocates a value or a list.
  *  \param v          The value.
  *
  *  \return This function always returns NULL.
  *
- *  \note Lists are implemented as values, but you should use tcl_list_free() to
- *        deallocate lists.
+ *  \note Lists are implemented as values (strings), so this function
+ *        deallocates both.
  */
-tcl_value_t *tcl_free(tcl_value_t *v);
+struct tcl_value *tcl_free(struct tcl_value *v);
 
 /** tcl_list_new() creates an empty list. Use this function to start a new list
- *  (then append items to it).
+ *  (then append items to it). The list must be freed with tcl_free().
  */
-tcl_value_t *tcl_list_new(void);
+struct tcl_value *tcl_list_new(void);
 
 /** tcl_list_length() returns the number of elements in a list.
  *  \param list       The list.
  *
  *  \return The number of elements in the list.
  */
-int tcl_list_length(tcl_value_t *list);
+int tcl_list_length(struct tcl_value *list);
 
 /** tcl_list_item() retrieves an element from the list.
  *  \param list       The list.
@@ -168,18 +161,18 @@ int tcl_list_length(tcl_value_t *list);
  *
  *  \note The returned element is a copy, which must be freed with tcl_free().
  */
-tcl_value_t *tcl_list_item(tcl_value_t *list, int index);
+struct tcl_value *tcl_list_item(struct tcl_value *list, int index);
 
 /** tcl_list_append() appends an item to the list, and frees the item.
  *  \param list       The original list.
  *  \param tail       The item to append.
  *
- *  \return The list with the item appended.
+ *  \return true on success, false on failure.
  *
  *  \note Both the original list and the item that was appended, are
  *        deallocated (freed).
  */
-tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail);
+bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail);
 
 
 /* =========================================================================
@@ -203,14 +196,14 @@ tcl_value_t *tcl_list_append(tcl_value_t *list, tcl_value_t *tail);
  *  \note The "value" parameter (if not NULL) is owned by the variable after
  *        this function completes. Thus, the parameter should not be freed.
  */
-const tcl_value_t *tcl_var(struct tcl *tcl, const char *name, tcl_value_t *value);
+struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *value);
 
 
 /* =========================================================================
     User commands
    ========================================================================= */
 
-typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, tcl_value_t *args, void *user);
+typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, struct tcl_value *args, void *user);
 
 /** tcl_register() registers a C function to the ParTcl command set.
  *  \param tcl      The interpreter context.
@@ -241,7 +234,7 @@ struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
  *  \note The "result" parameter is is owned by the interpreter context when
  *        this function completes. Thus, the parameter should not be freed.
  */
-int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result);
+int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result);
 
 
 /* =========================================================================
@@ -251,6 +244,6 @@ int tcl_result(struct tcl *tcl, int flow, tcl_value_t *result);
 /** tcl_append() creates a new value that is the concatenation of the two
  *  parameters, and deletes the input parameters.
  */
-tcl_value_t *tcl_append(tcl_value_t *value, tcl_value_t *tail);
+bool tcl_append(struct tcl_value *value, struct tcl_value *tail);
 
 #endif /* _TCL_H */

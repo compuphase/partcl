@@ -13,8 +13,8 @@ static void check_eval(struct tcl *tcl, const char *s, char *expected) {
   }
   if (tcl_eval(tcl, s, strlen(s) + 1) == FERROR) {
     FAIL("eval returned error: %s, (%s)\n", tcl_errorinfo(tcl, NULL, NULL, NULL, 0), s);
-  } else if (strcmp(tcl_string(tcl->result), expected) != 0) {
-    FAIL("Expected %s, but got %s. (%s)\n", expected, tcl_string(tcl->result),
+  } else if (strcmp(tcl_data(tcl->result), expected) != 0) {
+    FAIL("Expected %s, but got %s. (%s)\n", expected, tcl_data(tcl->result),
          s);
   } else {
     printf("OK: %s -> %s\n", s, expected);
