@@ -54,22 +54,49 @@ enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN, FEXIT };
 #define LEX_VAR     0x02  /* special mode for parsing variable names */
 #define LEX_NO_CMT  0x04  /* don't allow comment here (so comment is allowed when this is not set) */
 
-static bool tcl_is_operator(char c) {
-  return (c == '|' || c == '&' || c == '~' || c == '<' || c == '>' ||
+/* special character classification */
+#define CTYPE_OPERATOR  0x01
+#define CTYPE_SPACE     0x02
+#define CTYPE_TERM      0x04
+#define CTYPE_SPECIAL   0x08
+#define CTYPE_Q_SPECIAL 0x10
+
+static unsigned char ctype_table[256] = { 0 };
+static void init_ctype(void) {
+  if (!ctype_table[0]) {
+    memset(ctype_table, 0, sizeof(ctype_table));
+    for (unsigned c = 0; c < 256; c++) {
+      /* operator */
+      if (c == '|' || c == '&' || c == '~' || c == '<' || c == '>' ||
           c == '=' || c == '!' || c == '-' || c == '+' || c == '*' ||
-          c == '/' || c == '%' || c == '?' || c == ':');
+          c == '/' || c == '%' || c == '?' || c == ':') {
+        ctype_table[c] |= CTYPE_OPERATOR;
+      }
+      /* space */
+      if (c == ' ' || c == '\t') {
+        ctype_table[c] |= CTYPE_SPACE;
+      }
+      /* terminator (execution point) */
+      if (c == '\n' || c == '\r' || c == ';' || c == '\0') {
+        ctype_table[c] |= CTYPE_TERM;
+      }
+      /* special: always */
+      if (c == '[' || c == ']' || c == '"' || c == '\\' || c == '\0' || c == '$') {
+        ctype_table[c] |= CTYPE_SPECIAL;
+      }
+      /* special: if outside double quotes */
+      if (c == '{' || c == '}' || c == ';' || c == '\r' || c == '\n') {
+        ctype_table[c] |= CTYPE_Q_SPECIAL;
+      }
+    }
+  }
 }
-
-static bool tcl_is_special(char c, bool quote) {
-  return (c == '[' || c == ']' || c == '"' || c == '\\' || c == '\0' || c == '$' ||
-          (!quote && (c == '{' || c == '}' || c == ';' || c == '\r' || c == '\n')) );
-}
-
-static bool tcl_is_space(char c) { return (c == ' ' || c == '\t'); }
-
-static bool tcl_is_end(char c) {
-  return (c == '\n' || c == '\r' || c == ';' || c == '\0');
-}
+#define tcl_is_operator(c)  ((ctype_table[(unsigned char)(c)] & CTYPE_OPERATOR) != 0)
+#define tcl_is_space(c)     ((ctype_table[(unsigned char)(c)] & CTYPE_SPACE) != 0)
+#define tcl_is_end(c)       ((ctype_table[(unsigned char)(c)] & CTYPE_TERM) != 0)
+#define tcl_is_special(c,quote) \
+        ((ctype_table[(unsigned char)(c)] & CTYPE_SPECIAL) != 0 ||  \
+         (!quote && (ctype_table[(unsigned char)(c)] & CTYPE_Q_SPECIAL) != 0))
 
 static int tcl_next(const char *string, size_t length, const char **from, const char **to,
                     unsigned *flags) {
@@ -2405,6 +2432,7 @@ static int tcl_cmd_expr(struct tcl *tcl, struct tcl_value *args, void *arg) {
 /* ------------------------------------------------------- */
 
 void tcl_init(struct tcl *tcl) {
+  init_ctype();
   assert(tcl);
   memset(tcl, 0, sizeof(struct tcl));
   tcl->env = tcl_env_alloc(NULL);

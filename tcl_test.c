@@ -18,6 +18,7 @@ int status = 0;
 #include "tcl_test_math.h"
 
 int main() {
+  init_ctype();
   test_lexer();
   test_subst();
   test_flow();
