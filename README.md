@@ -9,8 +9,11 @@ Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
 * Good test coverage.
 * Flexible and easy-to-use interface to C/C++ programs, can be extended with custom Tcl commands.
 * Runs well on bare metal embedded MCUs (though, dynamic memory allocation of some kind, &agrave;-la malloc() &amp; free(), is required).
+* Arithmetic in 64-bit integers.
 
 ## Usage
+
+The API is documented in the `tcl.h` file.
 
 ```c
 struct tcl tcl;
@@ -18,7 +21,8 @@ const char *script = "set x 4; puts [expr 2 + $x * 10]";
 
 tcl_init(&tcl);
 if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
-    printf("Result: %.*s\n", tcl_length(tcl.result), tcl_string(tcl.result));
+    struct tcl_value *retval = tcl_return(&tcl);
+    printf("Return: %.*s\n", tcl_length(retval), tcl_data(retval));
 } else {
     int code, line;
     const char *msg = tcl_errorpos(&tcl, &code, &line, NULL, 0);
@@ -26,6 +30,44 @@ if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
 }
 tcl_destroy(&tcl);
 ```
+
+There are a few key concepts in ParTcl: values, lists and variables.
+
+A "value" is a string, as used internally by ParTcl. It can be used as
+a C-language string (it is zero-terminated). However, it may contain
+embedded zero bytes (in case the Tcl script works on binary data), so it
+is safer to explicitly get the length. Values are allocated dynamically.
+You create a value with `tcl_value()` and delete it with `tcl_free()`.
+Function `tcl_data()` returns a pointer to the byte string, `tcl_length()`
+its length. You should not modify the contents directle; instead, you
+create a new value and delete the old one. An exception is that you can
+append a value to another with `tcl_append()`.
+
+A list is a string, as is common in Tcl. Thus, in ParTcl, a list is a "value".
+There are a few special functions on lists, however, that make sure that the
+list is well-formed. You start a new (empty) list with `tcl_list_new()` and
+add items to it with `tcl_list_append()`. Function `tcl_list_append()` takes
+two parameters: a list and a value to append. After the call, the value is
+*owned* by the list, and you should therefore not free the item.
+
+When done, the entire list is freed with `tcl_free()`.
+
+A variable holds a value. Or in the case of an array, a variable holds multiple
+values. You create a variable with `tcl_var()`. Currently, you should do this
+before `tcl_eval()` (and after `tcl_init()`). This creates a global variable.
+When you create C functions that you register to ParTcl as commands, and you 
+would create a variable in that function (when it is called), that variable will
+be a local variable.
+
+When you create a variable, you pass a value as its content. After the call, the
+value is *owned* by the variable. You must not free the value.
+
+You also use `tcl_var()` to have it return its value. Note that the returned value
+may not be modified and should not be cached (as a pointer). You can, of course, make
+a local copy of the value.
+
+There is currently no function to delete a single variable. Calling `tcl_destroy()`
+removes all variables (and you should then call `tcl_init()` again).
 
 ## Language syntax
 
