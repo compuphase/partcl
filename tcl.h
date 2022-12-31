@@ -3,6 +3,8 @@
 
 #include <stdbool.h>
 
+typedef long long tcl_int;
+
 struct tcl_value;
 struct tcl;
 struct tcl_value;
@@ -40,7 +42,7 @@ void tcl_destroy(struct tcl *tcl);
  *
  *  \note On completion (of a successful run), the output of the script is
  *        stored in the "result" field of the "tcl" context. You can read this
- *        value with `tcl_string`.
+ *        value with tcl_return().
  */
 int tcl_eval(struct tcl *tcl, const char *string, size_t length);
 
@@ -93,33 +95,34 @@ enum {
  *
  *  \return The detected value.
  */
-bool tcl_isnumber(const struct tcl_value *v);
+bool tcl_isnumber(const struct tcl_value *value);
 
-/** tcl_string() returns a pointer to the start of the contents of a value.
- *  \param v        The value.
+/** tcl_data() returns a pointer to the start of the contents of a value.
+ *
+ *  \param value    The value.
  *
  *  \return A pointer to the buffer.
  */
-const char *tcl_data(const struct tcl_value *v);
+const char *tcl_data(const struct tcl_value *value);
 
 /** tcl_length() returns the length of the contents of the value in characters.
  *
- *  \param v        The value.
+ *  \param value    The value.
  *
  *  \return The number of characters in the buffer of the value.
  *
  *  \note This function does _not_ check for escaped characters.
  */
-size_t tcl_length(const struct tcl_value *v);
+size_t tcl_length(const struct tcl_value *value);
 
 /** tcl_number() returns the value of a variable after parsing it as an integer
  *  value. The function supports decimal, octal and dexadecimal notation.
  *
- *  \param v        The value.
+ *  \param value    The value.
  *
  *  \return The numeric value of the parameter, or 0 on error.
  */
-long long tcl_number(const struct tcl_value *v);
+tcl_int tcl_number(const struct tcl_value *value);
 
 /** tcl_value() creates a value from a C string or data block.
  *  \param data     The contents to store in the value.

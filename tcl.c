@@ -60,6 +60,9 @@ enum { FERROR, FNORMAL, FRETURN, FBREAK, FAGAIN, FEXIT };
 #define CTYPE_TERM      0x04
 #define CTYPE_SPECIAL   0x08
 #define CTYPE_Q_SPECIAL 0x10
+#define CTYPE_ALPHA     0x20
+#define CTYPE_DIGIT     0x40
+#define CTYPE_HEXDIGIT  0x80
 
 static unsigned char ctype_table[256] = { 0 };
 static void init_ctype(void) {
@@ -88,6 +91,18 @@ static void init_ctype(void) {
       if (c == '{' || c == '}' || c == ';' || c == '\r' || c == '\n') {
         ctype_table[c] |= CTYPE_Q_SPECIAL;
       }
+      /* digits (decimal digits are also hexadecimal) */
+      if (c >= '0' && c <= '9') {
+        ctype_table[c] |= CTYPE_DIGIT | CTYPE_HEXDIGIT;
+      }
+      /* other hexadecimal digits */
+      if ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+        ctype_table[c] |= CTYPE_HEXDIGIT;
+      }
+      /* alphabetic characters (ASCII only) */
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        ctype_table[c] |= CTYPE_ALPHA;
+      }
     }
   }
 }
@@ -97,6 +112,9 @@ static void init_ctype(void) {
 #define tcl_is_special(c,quote) \
         ((ctype_table[(unsigned char)(c)] & CTYPE_SPECIAL) != 0 ||  \
          (!quote && (ctype_table[(unsigned char)(c)] & CTYPE_Q_SPECIAL) != 0))
+#define tcl_isalpha(c)      ((ctype_table[(unsigned char)(c)] & CTYPE_ALPHA) != 0)
+#define tcl_isdigit(c)      ((ctype_table[(unsigned char)(c)] & CTYPE_DIGIT) != 0)
+#define tcl_isxdigit(c)     ((ctype_table[(unsigned char)(c)] & CTYPE_HEXDIGIT) != 0)
 
 static int tcl_next(const char *string, size_t length, const char **from, const char **to,
                     unsigned *flags) {
@@ -252,9 +270,9 @@ bool tcl_isnumber(const struct tcl_value *value) {
   if (*p == '-') { p++; }           /* allow minus sign before the number */
   if (*p == '0' && (*(p + 1) == 'x' || *(p + 1) == 'X') ) {
     p += 2; /* hex. number */
-    while (isxdigit(*p)) { p++; }
+    while (tcl_isxdigit(*p)) { p++; }
   } else {
-    while (isdigit(*p)) { p++; }
+    while (tcl_isdigit(*p)) { p++; }
   }
   while (tcl_is_space(*p)) { p++; } /* allow trailing whitespace */
   return (*p == '\0');              /* if dropped on EOS -> successfully parsed
@@ -269,7 +287,7 @@ size_t tcl_length(const struct tcl_value *value) {
   return value ? value->length : 0;
 }
 
-long long tcl_number(const struct tcl_value *value) {
+tcl_int tcl_number(const struct tcl_value *value) {
   if (tcl_isnumber(value)) {
     return strtoll(value->data, NULL, 0);
   }
@@ -447,7 +465,7 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail) {
 /* ----------------------------- */
 /* ----------------------------- */
 
-static char *tcl_int2string(char *buffer, size_t bufsz, int radix, long long value);
+static char *tcl_int2string(char *buffer, size_t bufsz, int radix, tcl_int value);
 static int tcl_error_result(struct tcl *tcl, int flow, const char *symbol);
 static int tcl_var_index(const char *name, size_t *baselength);
 
@@ -549,7 +567,7 @@ static int tcl_var_index(const char *name, size_t *baselength) {
   int idx = 0;
   if (ptr > name && *(ptr - 1) == ')') {
     ptr--;
-    while (ptr > name && isdigit(*(ptr - 1))) {
+    while (ptr > name && tcl_isdigit(*(ptr - 1))) {
       ptr--;
     }
     if (ptr > name + 1 && *(ptr - 1) == '(') {
@@ -649,7 +667,7 @@ int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result) {
   return FLOW(flow);
 }
 
-static int tcl_numeric_result(struct tcl *tcl, int flow, long long result) {
+static int tcl_numeric_result(struct tcl *tcl, int flow, tcl_int result) {
   char buf[64] = "";
   char *ptr = tcl_int2string(buf, sizeof(buf), 10, result);
   return tcl_result(tcl, flow, tcl_value(ptr, strlen(ptr)));
@@ -668,9 +686,10 @@ static int tcl_error_result(struct tcl *tcl, int flow, const char *symbol) {
 
 static int tcl_empty_result(struct tcl *tcl) {
   assert(tcl && tcl->result);
-  if (tcl_length(tcl->result) > 0)
+  if (tcl_length(tcl->result) > 0) {
     tcl_result(tcl, FNORMAL, tcl_value("", 0)); /* skip setting empty result if
                                                    the result is already empty */
+  }
   return FNORMAL;
 }
 
@@ -891,7 +910,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
 /* --------------------------------- */
 /* --------------------------------- */
 
-static int tcl_expression(struct tcl *tcl, const char *expression, long long *result); /* forward declaration */
+static int tcl_expression(struct tcl *tcl, const char *expression, tcl_int *result); /* forward declaration */
 
 struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
                              unsigned short minargs, unsigned short maxargs,
@@ -994,7 +1013,7 @@ static int tcl_cmd_scan(struct tcl *tcl, struct tcl_value *args, void *arg) {
     if (*fptr == '%') {
       fptr++; /* skip '%' */
       char buf[64] = "";
-      if (isdigit(*fptr)) {
+      if (tcl_isdigit(*fptr)) {
         int w = (int)strtol(fptr, (char**)&fptr, 10);
         if (w > 0 && w < sizeof(buf) - 1) {
           strncpy(buf, sptr, w);
@@ -1072,7 +1091,7 @@ static int tcl_cmd_format(struct tcl *tcl, struct tcl_value *args, void *arg) {
         left_justify = true;
         fptr++;
       }
-      if (isdigit(*fptr)) {
+      if (tcl_isdigit(*fptr)) {
         bool zeropad = (*fptr == '0');
         pad = (int)strtol(fptr, (char**)&fptr, 10);
         if (pad <= 0 || pad > sizeof(field) - 1) {
@@ -1986,12 +2005,12 @@ struct expr {
   const char *pos;  /* current position in expression */
   int token;        /* current token */
   int lexflag;
-  long long lnumber;/* literal value */
+  tcl_int lnumber;  /* literal value */
   int error;
   struct tcl *tcl;  /* for variable lookup */
 };
 
-static long long expr_conditional(struct expr *expr);
+static tcl_int expr_conditional(struct expr *expr);
 #define lex(e)          ((e)->lexflag ? ((e)->lexflag = 0, (e)->token) : expr_lex(e) )
 #define unlex(e)        ((e)->lexflag = 1)
 
@@ -2073,12 +2092,12 @@ static int expr_lex(struct expr *expr) {
       break;
     }
     expr_skip(expr, 0);          /* erase white space */
-  } else if (isdigit(*expr->pos)) {
+  } else if (tcl_isdigit(*expr->pos)) {
     char *ptr;
     expr->token = TOK_NUMBER;
     expr->lnumber = strtol(expr->pos, &ptr, 0);
     expr->pos = ptr;
-    if (isalpha(*expr->pos) || *expr->pos == '.' || *expr->pos == ',')
+    if (tcl_isalpha(*expr->pos) || *expr->pos == '.' || *expr->pos == ',')
       expr_error(expr, eINVALID_NUM);
     expr_skip(expr, 0);          /* erase white space */
   } else if (*expr->pos == '$') {
@@ -2101,7 +2120,7 @@ static int expr_lex(struct expr *expr) {
     }
     if (*expr->pos == '(') {
       expr_skip(expr, 1);
-      long long v = expr_conditional(expr);
+      tcl_int v = expr_conditional(expr);
       if (lex(expr) != ')')
         expr_error(expr, ePARENTHESES);
       strcat(name, "(");
@@ -2120,8 +2139,8 @@ static int expr_lex(struct expr *expr) {
   return expr->token;
 }
 
-static long long expr_primary(struct expr *expr) {
-  long long v = 0;
+static tcl_int expr_primary(struct expr *expr) {
+  tcl_int v = 0;
   int tok_close = 0;
   switch (lex(expr)) {
   case '-':
@@ -2153,14 +2172,14 @@ static long long expr_primary(struct expr *expr) {
   return v;
 }
 
-static long long expr_power(struct expr *expr) {
-  long long v1 = expr_primary(expr);
+static tcl_int expr_power(struct expr *expr) {
+  tcl_int v1 = expr_primary(expr);
   while (lex(expr) == TOK_EXP) {
-    long long v2 = expr_power(expr); /* right-to-left associativity */
+    tcl_int v2 = expr_power(expr); /* right-to-left associativity */
     if (v2 < 0) {
       v1 = 0;
     } else {
-      long long n = v1;
+      tcl_int n = v1;
       v1 = 1;
       while (v2--)
         v1 *= n;
@@ -2170,11 +2189,11 @@ static long long expr_power(struct expr *expr) {
   return v1;
 }
 
-static long long expr_product(struct expr *expr) {
-  long long v1 = expr_power(expr);
+static tcl_int expr_product(struct expr *expr) {
+  tcl_int v1 = expr_power(expr);
   int op;
   while ((op = lex(expr)) == '*' || op == '/' || op == '%') {
-    long long v2 = expr_power(expr);
+    tcl_int v2 = expr_power(expr);
     if (op == '*') {
       v1 *= v2;
     } else {
@@ -2192,11 +2211,11 @@ static long long expr_product(struct expr *expr) {
   return v1;
 }
 
-static long long expr_sum(struct expr *expr) {
-  long long v1 = expr_product(expr);
+static tcl_int expr_sum(struct expr *expr) {
+  tcl_int v1 = expr_product(expr);
   int op;
   while ((op = lex(expr)) == '+' || op == '-') {
-    long long v2 = expr_product(expr);
+    tcl_int v2 = expr_product(expr);
     if (op == '+')
       v1 += v2;
     else
@@ -2206,11 +2225,11 @@ static long long expr_sum(struct expr *expr) {
   return v1;
 }
 
-static long long expr_shift(struct expr *expr) {
-  long long v1 = expr_sum(expr);
+static tcl_int expr_shift(struct expr *expr) {
+  tcl_int v1 = expr_sum(expr);
   int op;
   while ((op = lex(expr)) == TOK_SHL || op == TOK_SHR) {
-    long long v2 = expr_sum(expr);
+    tcl_int v2 = expr_sum(expr);
     if (op == TOK_SHL)
       v1 = (v1 << v2);
     else
@@ -2220,11 +2239,11 @@ static long long expr_shift(struct expr *expr) {
   return v1;
 }
 
-static long long expr_relational(struct expr *expr) {
-  long long v1 = expr_shift(expr);
+static tcl_int expr_relational(struct expr *expr) {
+  tcl_int v1 = expr_shift(expr);
   int op;
   while ((op = lex(expr)) == '<' || op == '>' || op == TOK_LE || op == TOK_GE) {
-    long long v2 = expr_shift(expr);
+    tcl_int v2 = expr_shift(expr);
     switch (op) {
     case '<':
       v1 = (v1 < v2);
@@ -2244,11 +2263,11 @@ static long long expr_relational(struct expr *expr) {
   return v1;
 }
 
-static long long expr_equality(struct expr *expr) {
-  long long v1 = expr_relational(expr);
+static tcl_int expr_equality(struct expr *expr) {
+  tcl_int v1 = expr_relational(expr);
   int op;
   while ((op = lex(expr)) == TOK_EQ || op == TOK_NE) {
-    long long v2 = expr_relational(expr);
+    tcl_int v2 = expr_relational(expr);
     if (op == TOK_EQ)
       v1 = (v1 == v2);
     else
@@ -2258,70 +2277,70 @@ static long long expr_equality(struct expr *expr) {
   return v1;
 }
 
-static long long expr_binary_and(struct expr *expr) {
-  long long v1 = expr_equality(expr);
+static tcl_int expr_binary_and(struct expr *expr) {
+  tcl_int v1 = expr_equality(expr);
   while (lex(expr) == '&') {
-    long long v2 = expr_equality(expr);
+    tcl_int v2 = expr_equality(expr);
     v1 = v1 & v2;
   }
   unlex(expr);
   return v1;
 }
 
-static long long expr_binary_xor(struct expr *expr) {
-  long long v1 = expr_binary_and(expr);
+static tcl_int expr_binary_xor(struct expr *expr) {
+  tcl_int v1 = expr_binary_and(expr);
   while (lex(expr) == '^') {
-    long long v2 = expr_binary_and(expr);
+    tcl_int v2 = expr_binary_and(expr);
     v1 = v1 ^ v2;
   }
   unlex(expr);
   return v1;
 }
 
-static long long expr_binary_or(struct expr *expr) {
-  long long v1 = expr_binary_xor(expr);
+static tcl_int expr_binary_or(struct expr *expr) {
+  tcl_int v1 = expr_binary_xor(expr);
   while (lex(expr) == '|') {
-    long long v2 = expr_binary_xor(expr);
+    tcl_int v2 = expr_binary_xor(expr);
     v1 = v1 | v2;
   }
   unlex(expr);
   return v1;
 }
 
-static long long expr_logic_and(struct expr *expr) {
-  long long v1 = expr_binary_or(expr);
+static tcl_int expr_logic_and(struct expr *expr) {
+  tcl_int v1 = expr_binary_or(expr);
   while (lex(expr) == TOK_AND) {
-    long long v2 = expr_binary_or(expr);
+    tcl_int v2 = expr_binary_or(expr);
     v1 = v1 && v2;
   }
   unlex(expr);
   return v1;
 }
 
-static long long expr_logic_or(struct expr *expr) {
-  long long v1 = expr_logic_and(expr);
+static tcl_int expr_logic_or(struct expr *expr) {
+  tcl_int v1 = expr_logic_and(expr);
   while (lex(expr) == TOK_OR) {
-    long long v2 = expr_logic_and(expr);
+    tcl_int v2 = expr_logic_and(expr);
     v1 = v1 || v2;
   }
   unlex(expr);
   return v1;
 }
 
-static long long expr_conditional(struct expr *expr) {
-  long long v1 = expr_logic_or(expr);
+static tcl_int expr_conditional(struct expr *expr) {
+  tcl_int v1 = expr_logic_or(expr);
   if (lex(expr) == '?') {
-    long long v2 = expr_conditional(expr);
+    tcl_int v2 = expr_conditional(expr);
     if (lex(expr) != ':')
       expr_error(expr, eINVALID_CHAR);
-    long long v3 = expr_logic_or(expr);
+    tcl_int v3 = expr_logic_or(expr);
     v1 = v1 ? v2 : v3;
   }
   unlex(expr);
   return v1;
 }
 
-static int tcl_expression(struct tcl *tcl, const char *expression, long long *result) {
+static int tcl_expression(struct tcl *tcl, const char *expression, tcl_int *result) {
   struct expr expr;
   memset(&expr, 0, sizeof(expr));
   expr.pos = expression;
@@ -2339,7 +2358,7 @@ static int tcl_expression(struct tcl *tcl, const char *expression, long long *re
   return expr.error;
 }
 
-static char *tcl_int2string(char *buffer, size_t bufsz, int radix, long long value) {
+static char *tcl_int2string(char *buffer, size_t bufsz, int radix, tcl_int value) {
   assert(buffer);
   assert(radix == 10 || radix == 16);
   char *p = buffer + bufsz - 1;
@@ -2414,7 +2433,7 @@ static int tcl_cmd_expr(struct tcl *tcl, struct tcl_value *args, void *arg) {
     }
   }
   /* parse expression */
-  long long result;
+  tcl_int result;
   int err = tcl_expression(tcl, tcl_data(expression), &result);
   if (err != eNONE) {
     r = MARKERROR(TCLERR_EXPR);
