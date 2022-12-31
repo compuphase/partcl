@@ -33,15 +33,44 @@ tcl_destroy(&tcl);
 
 There are a few key concepts in ParTcl: values, lists and variables.
 
+### Values
+
 A "value" is a string, as used internally by ParTcl. It can be used as
 a C-language string (it is zero-terminated). However, it may contain
 embedded zero bytes (in case the Tcl script works on binary data), so it
 is safer to explicitly get the length. Values are allocated dynamically.
 You create a value with `tcl_value()` and delete it with `tcl_free()`.
+
 Function `tcl_data()` returns a pointer to the byte string, `tcl_length()`
-its length. You should not modify the contents directle; instead, you
-create a new value and delete the old one. An exception is that you can
-append a value to another with `tcl_append()`.
+its length. You should not modify the contents directly; instead, you
+create a new value and delete the old one. The raw data of a value may
+move in memory; you should therefore not cache the pointer returned by
+`tcl_data()` either.
+
+An exception to the "don't modify a value" rule, is that you can append a
+value to another with `tcl_append()`. The `tcl_append()` function modifies
+the primary value (first argument) and deletes the "tail" argument. 
+
+```
+/* Raw string values */
+struct tcl_value *tcl_value(const char *data, size_t len);
+struct tcl_value *tcl_dup(struct tcl_value *value);
+bool tcl_append(struct tcl_value *value, struct tcl_value *tail);
+struct tcl_value *tcl_free(struct tcl_value *value);
+
+/* Helpers to access raw string or numeric value */
+const char *tcl_data(struct tcl_value *value);
+int tcl_length(struct tcl_value *value);
+bool tcl_isnumber(const struct tcl_value *valuealue);
+tcl_int tcl_number(struct tcl_value *value);
+```
+
+Functions `tcl_isnumber()` and `tcl_number()` are helper functions to check
+whether a value represents a (decimal) number and the numberic value of that
+number, respectively. The `tcl_int` type is declared in `tcl.h` as a `long long`
+(64-bit integer), but you can adjust this to `long` or another type.
+
+### Lists
 
 A list is a string, as is common in Tcl. Thus, in ParTcl, a list is a "value".
 There are a few special functions on lists, however, that make sure that the
@@ -50,7 +79,22 @@ add items to it with `tcl_list_append()`. Function `tcl_list_append()` takes
 two parameters: a list and a value to append. After the call, the value is
 *owned* by the list, and you should therefore not free the item.
 
-When done, the entire list is freed with `tcl_free()`.
+When done, the entire list is freed with `tcl_free()`, just like values.
+
+```
+/* List values */
+struct tcl_value *tcl_list_new();
+struct tcl_value *tcl_list_append(struct tcl_value *value, struct tcl_value *tail);
+struct tcl_value *tcl_list_item(struct tcl_value *value, int index);
+int tcl_list_length(struct tcl_value *value);
+```
+
+In the default implementation lists are implemented as raw strings that add
+some escaping (braces) around each item (lists thus resemble Tcl source code).
+It's a simple solution that also reduces the code, but in some exotic cases the
+escaping can go wrong and invalid results will be returned.
+
+### Variables
 
 A variable holds a value. Or in the case of an array, a variable holds multiple
 values. You create a variable with `tcl_var()`. Currently, you should do this
@@ -182,43 +226,31 @@ otherwise loop can end earlier if a syntax error is found. It allows to
 "validate" input string without evaluating it and detect when a full command
 has been read.
 
-## Data types
+## Memory management
 
 Tcl uses strings as a primary data type. When a Tcl script is evaluated, many of
 the strings are created, disposed or modified. In embedded systems, memory
 management can be complex, so all operations with Tcl values are moved into
-isolated functions that can be easily rewritten to optimize certain parts (e.g.
+isolated functions that can be rewritten to optimize certain parts (e.g.
 to use a pool of strings, a custom memory allocator, cache numerical or list
 values to increase performance etc).
 
 ```
-/* Raw string values */
-tcl_value_t *tcl_value(const char *data, size_t len, bool binary);
-tcl_value_t *tcl_dup(tcl_value_t *v);
-tcl_value_t *tcl_append(tcl_value_t *v, tcl_value_t *tail);
-int tcl_length(tcl_value_t *v);
-void tcl_free(tcl_value_t *v);
+/* Functions calling malloc() or free() */
+struct tcl_value *tcl_value(const char *data, size_t len);
+bool tcl_append(struct tcl_value *value, struct tcl_value *tail);
+bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail);
+struct tcl_value *tcl_free(struct tcl_value *value);
+struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *value);
+void tcl_destroy(struct tcl *tcl);
 
-/* Helpers to access raw string or numeric value */
-int tcl_int(tcl_value_t *v);
-const char *tcl_string(tcl_value_t *v);
-
-/* List values */
-tcl_value_t *tcl_list_new();
-tcl_value_t *tcl_list_append(tcl_value_t *v, tcl_value_t *tail);
-tcl_value_t *tcl_list_item(tcl_value_t *v, int index);
-int tcl_list_length(tcl_value_t *v);
-void tcl_list_free(tcl_value_t *v);
+/* Internal functions also doing memory allocation */
+static struct tcl_env *tcl_env_alloc(struct tcl_env *parent);
+static struct tcl_var *tcl_env_var(struct tcl_env *env, const char *name);
+static struct tcl_env *tcl_env_free(struct tcl_env *env);
+static void tcl_var_free_values(struct tcl_var *var);
+static void tcl_var_free(struct tcl_env *env, struct tcl_var *var);
 ```
-
-Keep in mind, that `..._append()` functions free the tail argument.
-Also, the string returned by `tcl_string()` it not meant to be mutated or
-cached.
-
-In the default implementation lists are implemented as raw strings that add
-some escaping (braces) around each item. It's a simple solution that also
-reduces the code, but in some exotic cases the escaping can become wrong and
-invalid results will be returned.
 
 ## Environments
 
