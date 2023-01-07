@@ -1738,10 +1738,34 @@ static int tcl_cmd_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
 }
 
 static struct tcl_value *tcl_make_condition_list(struct tcl_value *cond) {
+  assert(cond);
+  /* add the implied "expr" in front of the condition, except if either:
+     - the condition is enveloped between [...] (so it is already evaluated)
+     - the condition is a number (so there is nothing to evaluate) */
+  const char *data = tcl_data(cond);
+  size_t len = tcl_length(cond);
+  if ((len >= 2 && *data == '[' && *(data + len - 1) == ']') || tcl_isnumber(cond)) {
+    return cond;
+  }
   struct tcl_value *list = tcl_list_new();
   tcl_list_append(list, tcl_value("expr", 4));
   tcl_list_append(list, cond);
   return list;
+}
+
+int tcl_eval_condition(struct tcl *tcl, struct tcl_value *cond) {
+  assert(cond);
+  const char *data = tcl_data(cond);
+  size_t len = tcl_length(cond);
+  int r = FNORMAL;
+  if ((len >= 2 && *data == '[' && *(data + len - 1) == ']')) {
+    r = tcl_subst(tcl, data, len);
+  } else if (tcl_isnumber(cond)) {
+    r = tcl_numeric_result(tcl, FNORMAL, tcl_number(cond));
+  } else {
+    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+  }
+  return r;
 }
 
 static int tcl_cmd_if(struct tcl *tcl, struct tcl_value *args, void *arg) {
@@ -1756,7 +1780,7 @@ static int tcl_cmd_if(struct tcl *tcl, struct tcl_value *args, void *arg) {
       tcl_free(branch); /* ignore optional keyword "then", get next branch */
       branch = (i < n) ? tcl_list_item(args, i++) : NULL;
     }
-    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+    r = tcl_eval_condition(tcl, cond);
     tcl_free(cond);
     if (r != FNORMAL) {
       tcl_free(branch);   /* error in condition expression, abort */
@@ -1863,7 +1887,7 @@ static int tcl_cmd_while(struct tcl *tcl, struct tcl_value *args, void *arg) {
   struct tcl_value *body = tcl_list_item(args, 2);
   int r = FNORMAL;
   for (;;) {
-    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+    r = tcl_eval_condition(tcl, cond);
     if (r != FNORMAL) {
       break;
     }
@@ -1898,7 +1922,7 @@ static int tcl_cmd_for(struct tcl *tcl, struct tcl_value *args, void *arg) {
   struct tcl_value *post = tcl_list_item(args, 3);
   struct tcl_value *body = tcl_list_item(args, 4);
   for (;;) {
-    r = tcl_eval(tcl, tcl_data(cond), tcl_length(cond) + 1);
+    r = tcl_eval_condition(tcl, cond);
     if (r != FNORMAL) {
       break;
     }
