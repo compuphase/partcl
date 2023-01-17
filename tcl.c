@@ -2590,7 +2590,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "switch", tcl_cmd_switch, 3, 0, NULL);
   tcl_register(tcl, "unset", tcl_cmd_unset, 2, 0, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, 3, NULL);
-# ifndef TCL_DISABLE_PUTS
+# ifndef TCL_DISABLE_CLOCK
     tcl_register(tcl, "clock", tcl_cmd_clock, 2, 4, NULL);
 # endif
 # ifndef TCL_DISABLE_PUTS
