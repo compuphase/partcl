@@ -1712,6 +1712,43 @@ static int tcl_cmd_join(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, string);
 }
 
+#ifndef TCL_DISABLE_CLOCK
+#include <time.h>
+
+static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  int r = FERROR;
+  struct tcl_value *cmd = tcl_list_item(args, 1);
+  if (SUBCMD(tcl_data(cmd), "seconds")) {
+    char buffer[20];
+    sprintf(buffer, "%lu", (long)time(NULL));
+    r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
+  } else if (SUBCMD(tcl_data(cmd), "format")) {
+    int argcount = tcl_list_length(args);
+    if (argcount < 3) {
+      r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+    } else {
+      struct tcl_value *v_tstamp = tcl_list_item(args, 2);
+      time_t tstamp = (time_t)tcl_number(v_tstamp);
+      tcl_free(v_tstamp);
+      struct tm *timeinfo = localtime(&tstamp);
+      struct tcl_value *v_format = (tcl_list_length(args) > 3) ? tcl_list_item(args, 3) : NULL;
+      const char *format = v_format ? tcl_data(v_format) : "%Y-%m-%d %H:%M:%S";
+      char buffer[50];
+      strftime(buffer, sizeof buffer, format, timeinfo);
+      r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
+      if (v_format) {
+        tcl_free(v_format);
+      }
+    }
+  } else {
+    r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+  }
+  tcl_free(cmd);
+  return r;
+}
+#endif
+
 #ifndef TCL_DISABLE_PUTS
 static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg) {
   (void)arg;
@@ -2553,9 +2590,12 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "switch", tcl_cmd_switch, 3, 0, NULL);
   tcl_register(tcl, "unset", tcl_cmd_unset, 2, 0, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, 3, NULL);
-#ifndef TCL_DISABLE_PUTS
-  tcl_register(tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
-#endif
+# ifndef TCL_DISABLE_PUTS
+    tcl_register(tcl, "clock", tcl_cmd_clock, 2, 4, NULL);
+# endif
+# ifndef TCL_DISABLE_PUTS
+    tcl_register(tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
+#  endif
 }
 
 void tcl_destroy(struct tcl *tcl) {
