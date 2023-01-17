@@ -1460,12 +1460,12 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
     struct tcl_var *var = NULL;
     while (blen > 0) {
       /* make value (depending on step size) and convert to string */
-      long value = 0;
+      tcl_int value = 0;
       for (int i = 0; i < step && i < blen; i++) {
         if (bigendian) {
-          value |= (long)*(bptr + i) << 8 * (step - 1 - i);
+          value |= (tcl_int)*(bptr + i) << 8 * (step - 1 - i);
         } else {
-          value |= (long)*(bptr + i) << 8 * i;
+          value |= (tcl_int)*(bptr + i) << 8 * i;
         }
       }
       char buf[64];
@@ -1719,11 +1719,11 @@ static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
   (void)arg;
   int r = FERROR;
   struct tcl_value *cmd = tcl_list_item(args, 1);
-  if (SUBCMD(tcl_data(cmd), "seconds")) {
+  if (SUBCMD(cmd, "seconds")) {
     char buffer[20];
     sprintf(buffer, "%lu", (long)time(NULL));
     r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
-  } else if (SUBCMD(tcl_data(cmd), "format")) {
+  } else if (SUBCMD(cmd, "format")) {
     int argcount = tcl_list_length(args);
     if (argcount < 3) {
       r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
