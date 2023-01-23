@@ -1712,7 +1712,7 @@ static int tcl_cmd_join(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, string);
 }
 
-#ifndef TCL_DISABLE_CLOCK
+#if !defined TCL_DISABLE_CLOCK
 #include <time.h>
 
 static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
@@ -1749,12 +1749,134 @@ static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
 }
 #endif
 
-#ifndef TCL_DISABLE_PUTS
+#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
 static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg) {
   (void)arg;
-  struct tcl_value *text = tcl_list_item(args, 1);
-  puts(tcl_data(text));
-  return tcl_result(tcl, FNORMAL, text);
+  struct tcl_value *fd = NULL;
+  struct tcl_value *text = NULL;
+  if (tcl_list_length(args) == 3) {
+    fd = tcl_list_item(args, 1);
+    text = tcl_list_item(args, 2);
+    fputs(tcl_data(text), (FILE*)tcl_number(fd));
+  } else {
+    text = tcl_list_item(args, 1);
+    puts(tcl_data(text));
+  }
+  tcl_free(text);
+  if (fd) {
+    tcl_free(fd);
+  }
+  return tcl_empty_result(tcl);
+}
+#endif
+
+#if !defined TCL_DISABLE_FILEIO
+static int tcl_cmd_open(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  struct tcl_value *path = tcl_list_item(args, 1);
+  struct tcl_value *mode = (tcl_list_length(args) == 3) ? tcl_list_item(args, 2) : NULL;
+  FILE *fp = fopen(tcl_data(path), mode ? tcl_data(mode) : "r");
+  tcl_free(path);
+  if (mode) {
+    tcl_free(mode);
+  }
+  return tcl_numeric_result(tcl, FNORMAL, (tcl_int)fp);
+}
+
+static int tcl_cmd_close(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  struct tcl_value *fh = tcl_list_item(args, 1);
+  int r = fclose((FILE*)tcl_number(fh));
+  tcl_free(fh);
+  return tcl_numeric_result(tcl, FNORMAL, r);
+}
+
+static int tcl_cmd_seek(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  struct tcl_value *fh = tcl_list_item(args, 1);
+  struct tcl_value *offset = tcl_list_item(args, 2);
+  int org = SEEK_SET;
+  if (tcl_list_length(args) == 4) {
+    struct tcl_value *origin = tcl_list_item(args, 3);
+    if (strcmp(tcl_data(origin), "current")) {
+      org = SEEK_CUR;
+    } else if (strcmp(tcl_data(origin), "end")) {
+      org = SEEK_END;
+    }
+    tcl_free(origin);
+  }
+  fseek((FILE *)tcl_number(fh), (long)tcl_number(offset), org);
+  tcl_free(fh);
+  tcl_free(offset);
+  return tcl_empty_result(tcl);
+}
+
+static int tcl_cmd_tell(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  struct tcl_value *fh = tcl_list_item(args, 1);
+  long r = ftell((FILE*)tcl_number(fh));
+  tcl_free(fh);
+  return tcl_numeric_result(tcl, FNORMAL, r);
+}
+
+static int tcl_cmd_eof(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  struct tcl_value *fh = tcl_list_item(args, 1);
+  int r = feof((FILE*)tcl_number(fh));
+  tcl_free(fh);
+  return tcl_numeric_result(tcl, FNORMAL, r);
+}
+
+static int tcl_cmd_read(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  struct tcl_value *fh = tcl_list_item(args, 1);
+  long bytecount = LONG_MAX;
+  if (tcl_list_length(args) == 3) {
+    struct tcl_value *bytes = tcl_list_item(args, 2);
+    bytecount = tcl_number(bytes);
+    tcl_free(bytes);
+  }
+  FILE *fp = ((FILE*)tcl_number(fh));
+  tcl_free(fh);
+  /* check how many bytes to read (especially if no "bytecount" argument was given) */
+  long pos = ftell(fp);
+  fseek(fp, 0, SEEK_END);
+  long remaining = ftell(fp) - pos;
+  fseek(fp, pos, SEEK_SET);
+  if (bytecount > remaining) {
+    bytecount = remaining;
+  }
+  char *buffer = malloc(bytecount);
+  if (buffer == NULL) {
+    return tcl_error_result(tcl, MARKERROR(TCLERR_MEMORY), NULL);
+  }
+  size_t count = fread(buffer, 1, bytecount, fp);
+  assert(count <= bytecount); /* can be smaller when \r\n is translated to \n */
+  struct tcl_value *result = tcl_value(buffer, count);
+  free(buffer);
+  return tcl_result(tcl, FNORMAL, result);
+}
+
+static int tcl_cmd_gets(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  struct tcl_value *fh = tcl_list_item(args, 1);
+  char buffer[1024];
+  char *p = fgets(buffer, sizeof(buffer), (FILE*)tcl_number(fh));
+  tcl_free(fh);
+  if (p == NULL) {
+    return tcl_empty_result(tcl);
+  }
+  char *newline = strchr(buffer, '\n');
+  if (newline) {
+    *newline = '\0';  /* remove trailing newline (because puts adds it) */
+  }
+  struct tcl_value *result = tcl_value(buffer, strlen(buffer));
+  if (tcl_list_length(args) == 3) {
+    struct tcl_value *varname = tcl_list_item(args, 2);
+    tcl_var(tcl, tcl_data(varname), tcl_dup(result));
+    tcl_free(varname);
+  }
+  return tcl_result(tcl, FNORMAL, result);
 }
 #endif
 
@@ -2590,10 +2712,19 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "switch", tcl_cmd_switch, 3, 0, NULL);
   tcl_register(tcl, "unset", tcl_cmd_unset, 2, 0, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, 3, NULL);
-# ifndef TCL_DISABLE_CLOCK
+# if !defined TCL_DISABLE_CLOCK
     tcl_register(tcl, "clock", tcl_cmd_clock, 2, 4, NULL);
 # endif
-# ifndef TCL_DISABLE_PUTS
+# if !defined TCL_DISABLE_FILEIO
+    tcl_register(tcl, "close", tcl_cmd_close, 2, 2, NULL);
+    tcl_register(tcl, "eof", tcl_cmd_eof, 2, 2, NULL);
+    tcl_register(tcl, "gets", tcl_cmd_gets, 2, 3, NULL);
+    tcl_register(tcl, "open", tcl_cmd_open, 2, 3, NULL);
+    tcl_register(tcl, "puts", tcl_cmd_puts, 2, 3, NULL);
+    tcl_register(tcl, "read", tcl_cmd_read, 2, 3, NULL);
+    tcl_register(tcl, "seek", tcl_cmd_seek, 3, 4, NULL);
+    tcl_register(tcl, "tell", tcl_cmd_tell, 2, 2, NULL);
+# elif !defined TCL_DISABLE_PUTS
     tcl_register(tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
 #  endif
 }

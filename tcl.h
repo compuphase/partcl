@@ -125,7 +125,8 @@ size_t tcl_length(const struct tcl_value *value);
 tcl_int tcl_number(const struct tcl_value *value);
 
 /** tcl_value() creates a value from a C string or data block.
- *  \param data     The contents to store in the value.
+ *  \param data     The contents to store in the value. A copy is made of this
+ *                  buffer.
  *  \param len      The length of the data.
  *
  *  \return A pointer to the created value.
