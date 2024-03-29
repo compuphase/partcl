@@ -30,6 +30,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "fortify.h"
 #include "tcl.h"
 
 
@@ -363,7 +364,7 @@ struct tcl_value *tcl_list_new(void) {
   return tcl_value("", 0);
 }
 
-int tcl_list_length(struct tcl_value *list) {  /* returns the number of items in the list */
+int tcl_list_length(const struct tcl_value *list) {  /* returns the number of items in the list */
   int count = 0;
   tcl_each(tcl_data(list), tcl_length(list) + 1, 0) {
     if (p.token == TFIELD) {
@@ -1712,6 +1713,193 @@ static int tcl_cmd_join(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, string);
 }
 
+#if !defined TCL_DISABLE_BINARY
+enum {
+  BIN_I8,   /* 8-bit signed (char) */
+  BIN_U8,   /* 8-bit unsigned (byte) */
+  BIN_I16,  /* 16-bit signed, little endian */
+  BIN_U16,  /* 16-bit unsigned, little endian */
+  BIN_I32,  /* 32-bit signed, little endian */
+  BIN_U32,  /* 32-bit unsigned, little endian */
+  BIN_I64,  /* 64-bit signed, little endian */
+  BIN_U64,  /* 64-bit unsigned, little endian */
+};
+#define BINFMT_SIZE     0x0f  /* word size mask */
+#define BINFMT_BIG      0x40  /* big endian flag */
+#define BINFMT_UNSIGNED 0x80  /* unsigned flag */
+#define BINFMT_MAXLEN   128
+
+static bool binary_format(unsigned char fmt[BINFMT_MAXLEN], const char *source)
+{
+  assert(fmt != NULL);
+  assert(source != NULL);
+  if (*source == '\0') {
+    return false;
+  }
+  int i=0;
+  while (i < BINFMT_MAXLEN && *source != '\0') {
+    unsigned char flag=0;
+    switch (*source) {
+    case 'c':   /* 8-bit integer */
+      flag = 1;
+      break;
+    case 's':   /* 16-bit integer */
+    case 'S':
+      flag = 2;
+      break;
+    case 'i':   /* 32-bit integer */
+    case 'I':
+      flag = 4;
+      break;
+    case 'w':   /* 64-bit integer */
+    case 'W':
+      flag = 8;
+      break;
+    default:
+      return false;
+    }
+    if (isupper(*source)) {
+      flag |= BINFMT_BIG;
+    }
+    source++; /* skip type letter */
+    if (*source == 'u') {
+      flag |= BINFMT_UNSIGNED;
+      source++;
+    }
+    unsigned count = 1;
+    if (isdigit(*source)) {
+      count = (unsigned)strtol(source, (char**)&source, 10);
+    } else if (*source == '*') {
+      count = UINT_MAX;
+      source++;
+    }
+    if (count == 0) {
+      return false;
+    }
+    while (count-- != 0 && i < BINFMT_MAXLEN) {
+      fmt[i++] = flag;
+    }
+  }
+  return true;
+}
+
+static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  int r = FERROR;
+  int nargs = tcl_list_length(args);
+  int reqargs = 4, fmtidx = 2;
+  struct tcl_value *subcmd = tcl_list_item(args, 1);
+  if (SUBCMD(subcmd, "scan")) {
+    reqargs = 5;
+    fmtidx = 3;
+  }
+  if (nargs < reqargs) {
+    tcl_free(subcmd);
+    return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+  }
+
+  unsigned char fmt[BINFMT_MAXLEN];
+  struct tcl_value *fmtfield = tcl_list_item(args, fmtidx);
+  if (!binary_format(fmt, tcl_data(fmtfield))) {
+    tcl_free(subcmd);
+    tcl_free(fmtfield);
+    return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+  }
+
+  int numvars = nargs - (fmtidx + 1); /* first argument is behind the format string */
+  if (numvars > BINFMT_MAXLEN) {
+    numvars = BINFMT_MAXLEN;
+  }
+
+  if (SUBCMD(subcmd, "format")) {
+    /* syntax "binary format fmt arg ..." */
+    size_t datalen = 0;
+    for (int i = 0; i < numvars; i++) {
+      datalen += (fmt[i] & BINFMT_SIZE);
+    }
+    char *rawdata = malloc(datalen);
+    if (rawdata != NULL) {
+      int dataidx = 0;
+      for (int varidx = 0; varidx < numvars; varidx++) {
+        struct tcl_value *argvalue = tcl_list_item(args, varidx + fmtidx + 1);
+        tcl_int val = tcl_number(argvalue);
+        tcl_free(argvalue);
+        memcpy(rawdata + dataidx, &val, fmt[varidx] & BINFMT_SIZE);
+        if (fmt[varidx] & BINFMT_BIG) {
+          int low = 0;
+          int high = (fmt[varidx] & BINFMT_SIZE) - 1;
+          while (low < high) {
+            unsigned char t = rawdata[dataidx + low];
+            rawdata[dataidx + low] = rawdata[dataidx + high];
+            rawdata[dataidx + high] = t;
+            low++;
+            high--;
+          }
+        }
+        dataidx += fmt[varidx] & BINFMT_SIZE;
+      }
+      r = tcl_result(tcl, FNORMAL, tcl_value(rawdata, datalen));
+      free(rawdata);
+    } else {
+      r = tcl_error_result(tcl, MARKERROR(TCLERR_MEMORY), NULL);
+    }
+  } else if (SUBCMD(subcmd, "scan")) {
+    /* syntax "binary scan data fmt var ..." */
+    struct tcl_value *data = tcl_list_item(args, 2);
+    size_t datalen = tcl_length(data);
+    char *rawdata = malloc(datalen);  /* make a copy of the data */
+    if (rawdata == NULL) {
+      tcl_free(subcmd);
+      tcl_free(fmtfield);
+      tcl_free(data);
+      return tcl_error_result(tcl, MARKERROR(TCLERR_MEMORY), NULL);
+    }
+    memcpy(rawdata, tcl_data(data), datalen);
+    tcl_free(data);
+    int varidx = 0;
+    int dataidx = 0;
+    while (varidx < numvars && dataidx + (fmt[varidx] & BINFMT_SIZE) <= datalen) {
+      /* convert Big Endian to Little Endian before moving to numeric value */
+      if (fmt[varidx] & BINFMT_BIG) {
+        int low = 0;
+        int high = (fmt[varidx] & BINFMT_SIZE) - 1;
+        while (low < high) {
+          unsigned char t = rawdata[dataidx + low];
+          rawdata[dataidx + low] = rawdata[dataidx + high];
+          rawdata[dataidx + high] = t;
+          low++;
+          high--;
+        }
+      }
+      tcl_int val = 0;
+      /* for sign extension, look at the sign bit of the last byte (now that the
+         bytes are stored in Little Endian) */
+      if (!(fmt[varidx] & BINFMT_UNSIGNED)) {
+        int high = (fmt[varidx] & BINFMT_SIZE) - 1;
+        if (rawdata[dataidx + high] & 0x80) {
+          val = -1;
+        }
+      }
+      memcpy(&val, rawdata + dataidx, fmt[varidx] & BINFMT_SIZE);
+      dataidx += fmt[varidx] & BINFMT_SIZE;
+      char field[30];
+      char *fptr = tcl_int2string(field, sizeof field, 10, val);
+      struct tcl_value *varname = tcl_list_item(args, varidx + fmtidx + 1);
+      tcl_var(tcl, tcl_data(varname), tcl_value(fptr, strlen(fptr)));
+      tcl_free(varname);
+      varidx++;
+    }
+    free(rawdata);
+    r = tcl_numeric_result(tcl, FNORMAL, 1);
+  } else {
+    r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+  }
+  tcl_free(subcmd);
+  tcl_free(fmtfield);
+  return r;
+}
+#endif
+
 #if !defined TCL_DISABLE_CLOCK
 #include <time.h>
 
@@ -1721,7 +1909,7 @@ static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
   struct tcl_value *cmd = tcl_list_item(args, 1);
   if (SUBCMD(cmd, "seconds")) {
     char buffer[20];
-    sprintf(buffer, "%lu", (long)time(NULL));
+    sprintf(buffer, "%ld", (long)time(NULL));
     r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
   } else if (SUBCMD(cmd, "format")) {
     int argcount = tcl_list_length(args);
@@ -2726,7 +2914,10 @@ void tcl_init(struct tcl *tcl) {
     tcl_register(tcl, "tell", tcl_cmd_tell, 2, 2, NULL);
 # elif !defined TCL_DISABLE_PUTS
     tcl_register(tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
-#  endif
+# endif
+# if !defined TCL_DISABLE_BINARY
+    tcl_register(tcl, "binary", tcl_cmd_binary, 4, 0, NULL);
+# endif
 }
 
 void tcl_destroy(struct tcl *tcl) {

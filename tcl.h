@@ -155,7 +155,7 @@ struct tcl_value *tcl_list_new(void);
  *
  *  \return The number of elements in the list.
  */
-int tcl_list_length(struct tcl_value *list);
+int tcl_list_length(const struct tcl_value *list);
 
 /** tcl_list_item() retrieves an element from the list.
  *  \param list       The list.
