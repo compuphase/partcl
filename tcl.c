@@ -2536,10 +2536,10 @@ static int expr_lex(struct expr *expr) {
       tcl_int v = expr_conditional(expr);
       if (lex(expr) != ')')
         expr_error(expr, ePARENTHESES);
-      strcat(name, "(");
+      strlcat(name, "(", sizeof name);
       char buf[64];
-      strcat(name, tcl_int2string(buf, sizeof buf, 10, v));
-      strcat(name, ")");
+      strlcat(name, tcl_int2string(buf, sizeof buf, 10, v), sizeof name);
+      strlcat(name, ")", sizeof name);
     }
     expr_skip(expr, 0);          /* erase white space */
     const struct tcl_value *varvalue = tcl_var(expr->tcl, name, NULL);
