@@ -1,6 +1,6 @@
 # ParTcl - a minimal Tcl interpreter
 
-Note: This is a fork; see [https://github.com/zserge/partcl] for the original.
+Note: This is a fork; see https://github.com/zserge/partcl for the original.
 
 In 1988, John Ousterhout developed Tcl with the goal to be a light-weight extension
 language for applications; a "macro language", so to speak. It has grown
@@ -13,7 +13,7 @@ to the original versions of Tcl (pre 7.0), in syntax and is semantics, than to
 the lastest release (8.6, at the time of writing).
 
 Therefore, if you wish to pick up a book on Tcl, in order to make better use of
-ParTcl, old books are fine. See, for example, "[http://csis.pace.edu/~benjamin/software/book1.pdf](Tcl and the Tk Toolkit)"
+ParTcl, old books are fine. See, for example, "[Tcl and the Tk Toolkit](http://csis.pace.edu/~benjamin/software/book1.pdf)"
 by John Ousterhout, and which is available for free.
 
 ## Features
