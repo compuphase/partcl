@@ -149,8 +149,8 @@ builtin command), but that same variable can still be used in string operations.
 | name   | summary |
 | ------ | ------- |
 | append | Append contents to a variable (concatenate strings). |
-| array  | Functions on array variables: `length` (same as `size`), `slice`. |
-| binary | Binary-to-integer conversion (and vice versa), width subcommands `format` and `scan`. |
+| array  | Functions on array variables: `length` (same as `size`) and `slice`. |
+| binary | Binary-to-integer conversion (and vice versa), width subcommands `format` and `scan`. This command can be disabled using `#define TCL_DISABLE_BINARY`, for implementations that do not need to handle binary data. |
 | break  | Abort a loop, jumps to the first instruction following the loop. |
 | clock  | Time query and formatting functions, with subcommands `seconds` and `format`. This command can be disabled using `#define TCL_DISABLE_CLOCK`, for any context where it does not make sense. |
 | close  | Close a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
@@ -209,6 +209,17 @@ These are the operators that can be used in the parameter of the `expr` command.
 | `&&`           | logic and |
 | `\|\|`         | logic or |
 | `? :`          | conditional selection (ternary operator) |
+
+ParTcl (like Tcl) uses *floored* integer division, in the sense that the remainder after
+division is always a positive value, and the following relation holds:
+```
+    v2 * (v1 / v2) + (v1 % v2) == v1
+```
+Floored division gives the same results as the (more common) *truncated* division:
+the division `14 / 3` is truncated to `4` (and with remainder `2`). The difference
+is with negative results: with truncated division `-14 / 3` equals `-4` with
+remainder `-2`, but with floored division, `-14 / 3` equals `-5` with remainder
+`1`.
 
 # Internals
 

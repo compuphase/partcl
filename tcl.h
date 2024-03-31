@@ -173,8 +173,8 @@ struct tcl_value *tcl_list_item(struct tcl_value *list, int index);
  *
  *  \return true on success, false on failure.
  *
- *  \note Both the original list and the item that was appended, are
- *        deallocated (freed).
+ *  \note Both the original data in the `list` parameter and the `tail` item
+ *        that was appended, are deallocated (freed).
  */
 bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail);
 

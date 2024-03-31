@@ -267,17 +267,20 @@ bool tcl_isnumber(const struct tcl_value *value) {
     return false;
   }
   const char *p = value->data;
-  while (tcl_is_space(*p)) { p++; } /* allow leading whitespace */
-  if (*p == '-') { p++; }           /* allow minus sign before the number */
+  while (tcl_is_space(*p)) { p++; }     /* allow leading whitespace */
+  if (*p == '-') { p++; }               /* allow minus sign before the number */
   if (*p == '0' && (*(p + 1) == 'x' || *(p + 1) == 'X') ) {
-    p += 2; /* hex. number */
-    while (tcl_isxdigit(*p)) { p++; }
+    p += 2;
+    while (tcl_isxdigit(*p)) { p++; }   /* hexadecimal number */
+  } else if (*p == '0') {
+    p++;                                /* octal number */
+    while ('0' <= *p && *p <= '7') { p++; }
   } else {
-    while (tcl_isdigit(*p)) { p++; }
+    while (tcl_isdigit(*p)) { p++; }    /* decimal number */
   }
-  while (tcl_is_space(*p)) { p++; } /* allow trailing whitespace */
-  return (*p == '\0');              /* if dropped on EOS -> successfully parsed
-                                       an integer format */
+  while (tcl_is_space(*p)) { p++; }     /* allow trailing whitespace */
+  return (*p == '\0');                  /* if dropped on EOS -> successfully
+                                           parsed an integer format */
 }
 
 const char *tcl_data(const struct tcl_value *value) {
@@ -1714,72 +1717,51 @@ static int tcl_cmd_join(struct tcl *tcl, struct tcl_value *args, void *arg) {
 }
 
 #if !defined TCL_DISABLE_BINARY
-enum {
-  BIN_I8,   /* 8-bit signed (char) */
-  BIN_U8,   /* 8-bit unsigned (byte) */
-  BIN_I16,  /* 16-bit signed, little endian */
-  BIN_U16,  /* 16-bit unsigned, little endian */
-  BIN_I32,  /* 32-bit signed, little endian */
-  BIN_U32,  /* 32-bit unsigned, little endian */
-  BIN_I64,  /* 64-bit signed, little endian */
-  BIN_U64,  /* 64-bit unsigned, little endian */
-};
-#define BINFMT_SIZE     0x0f  /* word size mask */
-#define BINFMT_BIG      0x40  /* big endian flag */
-#define BINFMT_UNSIGNED 0x80  /* unsigned flag */
-#define BINFMT_MAXLEN   128
-
-static bool binary_format(unsigned char fmt[BINFMT_MAXLEN], const char *source)
-{
-  assert(fmt != NULL);
+static bool binary_fmt(const char **source, unsigned *width, unsigned *count, bool *is_signed, bool *is_bigendian) {
   assert(source != NULL);
-  if (*source == '\0') {
+  const char *src = *source;
+  assert(src != NULL);
+  assert(width != NULL);
+  switch (*src) {
+  case 'c':   /* 8-bit integer */
+    *width = 1;
+    break;
+  case 's':   /* 16-bit integer */
+  case 'S':
+    *width = 2;
+    break;
+  case 'i':   /* 32-bit integer */
+  case 'I':
+    *width = 4;
+    break;
+  case 'w':   /* 64-bit integer */
+  case 'W':
+    *width = 8;
+    break;
+  default:
     return false;
   }
-  int i=0;
-  while (i < BINFMT_MAXLEN && *source != '\0') {
-    unsigned char flag=0;
-    switch (*source) {
-    case 'c':   /* 8-bit integer */
-      flag = 1;
-      break;
-    case 's':   /* 16-bit integer */
-    case 'S':
-      flag = 2;
-      break;
-    case 'i':   /* 32-bit integer */
-    case 'I':
-      flag = 4;
-      break;
-    case 'w':   /* 64-bit integer */
-    case 'W':
-      flag = 8;
-      break;
-    default:
-      return false;
-    }
-    if (isupper(*source)) {
-      flag |= BINFMT_BIG;
-    }
-    source++; /* skip type letter */
-    if (*source == 'u') {
-      flag |= BINFMT_UNSIGNED;
-      source++;
-    }
-    unsigned count = 1;
-    if (isdigit(*source)) {
-      count = (unsigned)strtol(source, (char**)&source, 10);
-    } else if (*source == '*') {
-      count = UINT_MAX;
-      source++;
-    }
-    if (count == 0) {
-      return false;
-    }
-    while (count-- != 0 && i < BINFMT_MAXLEN) {
-      fmt[i++] = flag;
-    }
+  assert(is_bigendian != NULL);
+  *is_bigendian = isupper(*src);
+  src++; /* skip type letter */
+  assert(is_signed != NULL);
+  *is_signed = true;
+  if (*src == 'u') {
+    *is_signed = false;
+    src++;
   }
+  assert(count != NULL);
+  *count = 1;
+  if (isdigit(*src)) {
+    *count = (unsigned)strtol(src, (char**)&src, 10);
+  } else if (*src == '*') {
+    *count = UINT_MAX;
+    src++;
+  }
+  if (count == 0) {
+    return false;
+  }
+  *source = src;
   return true;
 }
 
@@ -1798,36 +1780,43 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
     return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
   }
 
-  unsigned char fmt[BINFMT_MAXLEN];
-  struct tcl_value *fmtfield = tcl_list_item(args, fmtidx);
-  if (!binary_format(fmt, tcl_data(fmtfield))) {
-    tcl_free(subcmd);
-    tcl_free(fmtfield);
-    return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
-  }
-
+  struct tcl_value *fmt = tcl_list_item(args, fmtidx);
+  const char *fmtraw = tcl_data(fmt);
   int numvars = nargs - (fmtidx + 1); /* first argument is behind the format string */
-  if (numvars > BINFMT_MAXLEN) {
-    numvars = BINFMT_MAXLEN;
-  }
-
   if (SUBCMD(subcmd, "format")) {
     /* syntax "binary format fmt arg ..." */
+    /* get data size */
     size_t datalen = 0;
+    const char *ftmp = fmtraw;
     for (int i = 0; i < numvars; i++) {
-      datalen += (fmt[i] & BINFMT_SIZE);
+      unsigned width, count;
+      bool sign_extend, is_bigendian;
+      if (!binary_fmt(&ftmp, &width, &count, &sign_extend, &is_bigendian)) {
+        tcl_free(subcmd);
+        tcl_free(fmt);
+        return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+      }
+      if (count > numvars) {
+        count = numvars;
+      }
+      datalen+=width*count;
     }
     char *rawdata = malloc(datalen);
     if (rawdata != NULL) {
       int dataidx = 0;
+      unsigned width, count = 0;
+      bool sign_extend, is_bigendian;
       for (int varidx = 0; varidx < numvars; varidx++) {
+        if (count == 0) {
+          binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian);
+        }
         struct tcl_value *argvalue = tcl_list_item(args, varidx + fmtidx + 1);
         tcl_int val = tcl_number(argvalue);
         tcl_free(argvalue);
-        memcpy(rawdata + dataidx, &val, fmt[varidx] & BINFMT_SIZE);
-        if (fmt[varidx] & BINFMT_BIG) {
-          int low = 0;
-          int high = (fmt[varidx] & BINFMT_SIZE) - 1;
+        memcpy(rawdata + dataidx, &val, width);
+        if (is_bigendian) {
+          unsigned low = 0;
+          unsigned high = width - 1;
           while (low < high) {
             unsigned char t = rawdata[dataidx + low];
             rawdata[dataidx + low] = rawdata[dataidx + high];
@@ -1836,7 +1825,8 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
             high--;
           }
         }
-        dataidx += fmt[varidx] & BINFMT_SIZE;
+        dataidx += width;
+        count--;
       }
       r = tcl_result(tcl, FNORMAL, tcl_value(rawdata, datalen));
       free(rawdata);
@@ -1850,44 +1840,69 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
     char *rawdata = malloc(datalen);  /* make a copy of the data */
     if (rawdata == NULL) {
       tcl_free(subcmd);
-      tcl_free(fmtfield);
+      tcl_free(fmt);
       tcl_free(data);
       return tcl_error_result(tcl, MARKERROR(TCLERR_MEMORY), NULL);
     }
     memcpy(rawdata, tcl_data(data), datalen);
     tcl_free(data);
-    int varidx = 0;
     int dataidx = 0;
-    while (varidx < numvars && dataidx + (fmt[varidx] & BINFMT_SIZE) <= datalen) {
-      /* convert Big Endian to Little Endian before moving to numeric value */
-      if (fmt[varidx] & BINFMT_BIG) {
-        int low = 0;
-        int high = (fmt[varidx] & BINFMT_SIZE) - 1;
-        while (low < high) {
-          unsigned char t = rawdata[dataidx + low];
-          rawdata[dataidx + low] = rawdata[dataidx + high];
-          rawdata[dataidx + high] = t;
-          low++;
-          high--;
+    for (int varidx = 0; varidx < numvars; varidx++) {
+      /* get variable name */
+      char varname[128];
+      struct tcl_value *var = tcl_list_item(args, varidx + fmtidx + 1);
+      strlcpy(varname, tcl_data(var), sizeof varname);
+      tcl_free(var);
+      /* get field format */
+      unsigned width, count;
+      bool sign_extend, is_bigendian;
+      if (!binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian)) {
+        tcl_free(subcmd);
+        tcl_free(fmt);
+        free(rawdata);
+        return tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
+      }
+      /* get & format the data */
+      struct tcl_value *value;
+      assert(count > 0);
+      assert(width > 0);
+      for (unsigned c = 0; c < count && dataidx + width <= datalen; c++) {
+        if (is_bigendian) {
+          /* convert Big Endian to Little Endian before moving to numeric value */
+          unsigned low = 0;
+          unsigned high = width - 1;
+          while (low < high) {
+            unsigned char t = rawdata[dataidx + low];
+            rawdata[dataidx + low] = rawdata[dataidx + high];
+            rawdata[dataidx + high] = t;
+            low++;
+            high--;
+          }
+        }
+        tcl_int val = 0;
+        /* for sign extension, look at the sign bit of the last byte (now that the
+           bytes are stored in Little Endian) */
+        if (sign_extend) {
+          unsigned high = width - 1;
+          if (rawdata[dataidx + high] & 0x80) {
+            val = -1;
+          }
+        }
+        memcpy(&val, rawdata + dataidx, width);
+        dataidx += width;
+        /* store data */
+        char field[30];
+        char *fptr = tcl_int2string(field, sizeof field, 10, val);
+        if (count == 1) {
+          value = tcl_value(fptr, strlen(fptr));
+        } else {
+          if (c == 0) {
+            value = tcl_list_new();
+          }
+          tcl_list_append(value, tcl_value(fptr, strlen(fptr)));
         }
       }
-      tcl_int val = 0;
-      /* for sign extension, look at the sign bit of the last byte (now that the
-         bytes are stored in Little Endian) */
-      if (!(fmt[varidx] & BINFMT_UNSIGNED)) {
-        int high = (fmt[varidx] & BINFMT_SIZE) - 1;
-        if (rawdata[dataidx + high] & 0x80) {
-          val = -1;
-        }
-      }
-      memcpy(&val, rawdata + dataidx, fmt[varidx] & BINFMT_SIZE);
-      dataidx += fmt[varidx] & BINFMT_SIZE;
-      char field[30];
-      char *fptr = tcl_int2string(field, sizeof field, 10, val);
-      struct tcl_value *varname = tcl_list_item(args, varidx + fmtidx + 1);
-      tcl_var(tcl, tcl_data(varname), tcl_value(fptr, strlen(fptr)));
-      tcl_free(varname);
-      varidx++;
+      tcl_var(tcl, varname, value);
     }
     free(rawdata);
     r = tcl_numeric_result(tcl, FNORMAL, 1);
@@ -1895,7 +1910,7 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
     r = tcl_error_result(tcl, MARKERROR(TCLERR_PARAM), NULL);
   }
   tcl_free(subcmd);
-  tcl_free(fmtfield);
+  tcl_free(fmt);
   return r;
 }
 #endif
@@ -2611,10 +2626,14 @@ static tcl_int expr_product(struct expr *expr) {
       v1 *= v2;
     } else {
       if (v2 != 0L) {
-        if (op == '/')
-          v1 /= v2;
-        else
-          v1 = v1 % v2;
+        tcl_int div = v1 / v2;
+        tcl_int rem = v1 % v2;
+        /* ensure floored division, with positive remainder */
+        if (rem < 0) {
+          div -= 1;
+          rem += v1;
+        }
+        v1 = (op == '/') ? div : rem;
       } else {
         expr_error(expr, eDIV0);
       }
