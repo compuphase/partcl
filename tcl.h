@@ -58,6 +58,8 @@ struct tcl_value *tcl_return(struct tcl *tcl);
  *
  *  \param tcl      The interpreter context.
  *  \param code     [out] The error code. This parameter may be set to NULL.
+ *  \param errno    An optional error code set by the host. This parameter may
+ *                  be set to NULL.
  *  \param line     [out] The line number (1-based). This parameter may be set
  *                  to NULL.
  *  \param symbol   [out] May contain extra information on the error (such as
@@ -76,11 +78,15 @@ enum {
   TCLERR_SYNTAX,      /**< general syntax error */
   TCLERR_BRACES,      /**< unbalanced curly braces */
   TCLERR_EXPR,        /**< error in expression */
-  TCLERR_CMDUNKNOWN,  /**< unknown command (mismatch in name or arity) */
+  TCLERR_CMDUNKNOWN,  /**< unknown command */
+  TCLERR_CMDARGCOUNT, /**< wrong argument count on command */
   TCLERR_VARUNKNOWN,  /**< unknown variable name */
-  TCLERR_VARNAME,     /**< invalid variable name (e.g. too long) */
-  TCLERR_PARAM,       /**< incorrect (or missing) parameter to a command */
+  TCLERR_SYMNAME,     /**< invalid symbol name (e.g. too long) */
+  TCLERR_ARGUMENT,    /**< incorrect (or missing) argument to a command */
+  TCLERR_DEFAULTVAL,  /**< incorrect default value on parameter */
   TCLERR_SCOPE,       /**< scope error (e.g. command is allowed in local scope only) */
+  TCLERR_SYS,         /**< host-specific error (e.g. file not found) */
+  TCLERR_USER,        /**< error set with the "error" command */
 };
 
 
@@ -213,13 +219,14 @@ typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, struct tcl_value *args, void *user)
  *  \param tcl      The interpreter context.
  *  \param name     The name of the command.
  *  \param fn       The function pointer.
- *  \param minargs  The number of parameters of the command, which includes
- *                  the command name itself. Set this to zero for a variable
- *                  argument list.
- *  \param maxargs  The number of parameters of the command, which includes
- *                  the command name itself. Set this to zero for a variable
- *                  argument list.
- *  \param user     A user value (which is passed to the C function).
+ *  \param minargs  The minimum number of parameters of the command, which
+ *                  includes the command name itself (so the lowest valie value
+ *                  is 1).
+ *  \param maxargs  The maximum number of parameters of the command, which
+ *                  includes the command name itself. Set this to zero for a
+ *                  variable argument list.
+ *  \param user     A user value (which is passed to the C function); normally
+ *                  set to NULL.
  *
  *  \return A pointer to the command structure that was just added.
  */
@@ -232,7 +239,7 @@ struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
  *  \param result   The result (or "return value") of the C function. See notes
  *                  below.
  *
- *  \return This function returs the "flow" parameter. For the C interface, the
+ *  \return This function returns the "flow" parameter. For the C interface, the
  *          return value can be ignored.
  *
  *  \note The "result" parameter is is owned by the interpreter context when

@@ -215,11 +215,8 @@ division is always a positive value, and the following relation holds:
 ```
     v2 * (v1 / v2) + (v1 % v2) == v1
 ```
-Floored division gives the same results as the (more common) *truncated* division:
-the division `14 / 3` is truncated to `4` (and with remainder `2`). The difference
-is with negative results: with truncated division `-14 / 3` equals `-4` with
-remainder `-2`, but with floored division, `-14 / 3` equals `-5` with remainder
-`1`.
+For positive numerators &amp; denominators, floored division gives the same results as the (more common) *truncated* division: the division `14 / 3` is `4` (and with remainder `2`).
+The difference is with negative results: with truncated division `-14 / 3` equals `-4` with remainder `-2`, but with floored division, `-14 / 3` equals `-5` with remainder `1`.
 
 # Internals
 
