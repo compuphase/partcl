@@ -81,7 +81,8 @@ enum {
   TCLERR_CMDUNKNOWN,  /**< unknown command */
   TCLERR_CMDARGCOUNT, /**< wrong argument count on command */
   TCLERR_VARUNKNOWN,  /**< unknown variable name */
-  TCLERR_SYMNAME,     /**< invalid symbol name (e.g. too long) */
+  TCLERR_NAMEINVALID, /**< invalid symbol name */
+  TCLERR_NAMEEXISTS,  /**< symbol name already exists */
   TCLERR_ARGUMENT,    /**< incorrect (or missing) argument to a command */
   TCLERR_DEFAULTVAL,  /**< incorrect default value on parameter */
   TCLERR_SCOPE,       /**< scope error (e.g. command is allowed in local scope only) */
@@ -252,8 +253,26 @@ int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result);
     Internals
    ========================================================================= */
 
+/** tcl_cur_scope() returns the current scope level. It is zero at the global
+ *  level, and is incremented each time that a new local environment for a user
+ *  procedure is allocated.
+ *  \param tcl      The interpreter context.
+ *
+ *  \return The active scope.
+ */
+int tcl_cur_scope(struct tcl *tcl);
+
 /** tcl_append() creates a new value that is the concatenation of the two
  *  parameters, and deletes the input parameters.
+ *  \param value    The value to modify.
+ *  \param tail     The data to append to parameter `value`.
+ *
+ *  \return true on success, false on failure (i.e. memory allocation failure).
+ *
+ *  \note The `value` parameter is modified, meaning that its `data` block is
+ *        re-allocated. Any pointer held to the data, is therefore invalid after
+ *        the call to tcl_append().
+ *  \note The `tail` parameter is deleted by this function.
  */
 bool tcl_append(struct tcl_value *value, struct tcl_value *tail);
 

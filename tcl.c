@@ -492,18 +492,19 @@ struct tcl_errinfo {
   char *symbol;           /**< additional information */
 };
 
-struct tcl_var {
-  struct tcl_value *name;
-  struct tcl_value **value; /**< array of values */
-  int elements;           /**< for an array, the number of "values" allocated */
-  bool global;            /**< this is an alias for a global variable */
-  struct tcl_var *next;
-};
-
 struct tcl_env {
   struct tcl_var *vars;
   struct tcl_env *parent;
   struct tcl_errinfo errinfo;
+};
+
+struct tcl_var {
+  struct tcl_value *name;
+  struct tcl_value **value; /**< array of values */
+  int elements;           /**< for an array, the number of "values" allocated */
+  struct tcl_env *env;    /**< if set, this variable is an alias for a variable at a different scope */
+  struct tcl_value *alias;/**< if set, the variable name this variable is aliased to */
+  struct tcl_var *next;
 };
 
 static struct tcl_env *tcl_env_alloc(struct tcl_env *parent) {
@@ -552,18 +553,40 @@ static struct tcl_env *tcl_env_free(struct tcl_env *env) {
     env->vars = env->vars->next;
     tcl_free(var->name);
     tcl_var_free_values(var);
+    if (var->alias) {
+      tcl_free(var->alias);
+    }
     free(var);
   }
   free(env);
   return parent;
 }
 
-static struct tcl_env *tcl_global_env(struct tcl *tcl) {
+int tcl_cur_scope(struct tcl *tcl) {
   struct tcl_env *global_env = tcl->env;
+  int n = 0;
   while (global_env->parent) {
     global_env = global_env->parent;
+    n++;
   }
-  return global_env;
+  return n;
+}
+
+static struct tcl_env *tcl_env_scope(struct tcl *tcl, int level) {
+  assert(level >= 0 && level <= tcl_cur_scope(tcl));
+  level = tcl_cur_scope(tcl) - level; /* from absolute to relative level */
+  struct tcl_env *env = tcl->env;
+  while (level-- > 0) {
+    env = env->parent;
+  }
+  assert(env);
+  return env;
+}
+
+static const char *tcl_alias_name(const struct tcl_var *var) {
+  assert(var);
+  assert(var->env);     /* should only call this function on aliased variables */
+  return tcl_data(var->alias ? var->alias : var->name);
 }
 
 static int tcl_var_index(const char *name, size_t *baselength) {
@@ -605,8 +628,8 @@ static struct tcl_var *tcl_findvar(struct tcl_env *env, const char *name) {
 
 struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *value) {
   struct tcl_var *var = tcl_findvar(tcl->env, name);
-  if (var && var->global) { /* found local alias of a global variable; find the global */
-    var = tcl_findvar(tcl_global_env(tcl), name);
+  if (var && var->env) { /* found local alias of a global/upvar variable; find the global/upvar */
+    var = tcl_findvar(var->env, tcl_alias_name(var));
   }
   if (!var) {
     if (!value) { /* value being read before being set */
@@ -659,6 +682,9 @@ static void tcl_var_free(struct tcl_env *env, struct tcl_var *var) {
   /* then delete */
   tcl_free(var->name);
   tcl_var_free_values(var);
+  if (var->alias) {
+    tcl_free(var->alias);
+  }
   free(var);
 }
 
@@ -681,7 +707,7 @@ static int tcl_numeric_result(struct tcl *tcl, int flow, tcl_int result) {
 static int tcl_error_result(struct tcl *tcl, int flow, const char *symbol) {
   /* helper function for a common case */
   if (symbol) {
-    struct tcl_env *global_env = tcl_global_env(tcl);
+    struct tcl_env *global_env = tcl_env_scope(tcl, 0);
     if (!global_env->errinfo.symbol) {
       global_env->errinfo.symbol = strdup(symbol);
     }
@@ -717,7 +743,7 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
     return tcl_result(tcl, FNORMAL, tcl_value(string + 1, len - 2));
   case '$': {
     if (len >= MAX_VAR_LENGTH) {
-      return tcl_error_result(tcl, MARKERROR(TCLERR_SYMNAME), string + 1);
+      return tcl_error_result(tcl, MARKERROR(TCLERR_NAMEINVALID), string + 1);
     }
     string += 1; len -= 1;      /* skip '$' */
     if (*string == '$') {
@@ -955,11 +981,9 @@ static int tcl_cmd_unset(struct tcl *tcl, struct tcl_value *args, void *arg) {
     assert(name);
     struct tcl_var *var = tcl_findvar(tcl->env, tcl_data(name));
     if (var) {
-      if (var->global) {
-        assert(tcl->env->parent); /* globals can only be declared at local scope */
-        struct tcl_env *global_env = tcl_global_env(tcl);
-        struct tcl_var *global_var = tcl_findvar(global_env, tcl_data(name));
-        tcl_var_free(global_env, global_var);
+      if (var->env) {
+        struct tcl_var *ref_var = tcl_findvar(var->env, tcl_alias_name(var));
+        tcl_var_free(var->env, ref_var);
       }
       tcl_var_free(tcl->env, var);
     }
@@ -980,12 +1004,13 @@ static int tcl_cmd_global(struct tcl *tcl, struct tcl_value *args, void *arg) {
     assert(name);
     if (tcl_findvar(tcl->env, tcl_data(name)) != NULL) {
       /* name exists locally, cannot create an alias with the same name */
-      r = tcl_error_result(tcl, MARKERROR(TCLERR_SYMNAME), tcl_data(name));
+      r = tcl_error_result(tcl, MARKERROR(TCLERR_NAMEEXISTS), tcl_data(name));
     } else {
-      if (tcl_findvar(tcl_global_env(tcl), tcl_data(name)) == NULL) {
+      struct tcl_env *global_env = tcl_env_scope(tcl, 0);
+      if (tcl_findvar(global_env, tcl_data(name)) == NULL) {
         /* name not known as a global, create it first */
         struct tcl_env *save_env = tcl->env;
-        tcl->env = tcl_global_env(tcl);
+        tcl->env = global_env;
         tcl_var(tcl, tcl_data(name), tcl_value("", 0));
         tcl->env = save_env;
       }
@@ -993,10 +1018,71 @@ static int tcl_cmd_global(struct tcl *tcl, struct tcl_value *args, void *arg) {
       tcl_var(tcl, tcl_data(name), tcl_value("", 0));  /* make local */
       struct tcl_var *var = tcl_findvar(tcl->env, tcl_data(name));
       if (var) {
-        var->global = true;
+        var->env = global_env; /* mark as an alias to the global */
       }
     }
     tcl_free(name);
+  }
+  return r;
+}
+
+static int tcl_cmd_upvar(struct tcl *tcl, struct tcl_value *args, void *arg) {
+  (void)arg;
+  int r = FNORMAL;
+  int numargs = tcl_list_length(args);
+  int i = 1;
+  /* get desired level (which is optional) */
+  int level;
+  struct tcl_value *v = tcl_list_item(args, i);
+  assert(v);
+  const char *ptr = tcl_data(v);
+  if (isdigit(*ptr) || (*ptr == '-' && isdigit(*(ptr + 1))) || (*ptr == '#' && isdigit(*(ptr + 1)))) {
+    if (*ptr == '#') {
+      level = (int)strtol(ptr + 1, NULL, 10);
+    } else {
+      level = (int)strtol(ptr, NULL, 10);
+      if (level < 0) {
+        level = 0;
+      }
+      level = tcl_cur_scope(tcl) - level;   /* make absolute level (from relative) */
+    }
+    i++;
+  } else {
+    level = tcl_cur_scope(tcl) - 1;         /* move up one level */
+  }
+  tcl_free(v);
+  if (level < 0 || level > tcl_cur_scope(tcl)) {
+    return tcl_error_result(tcl, MARKERROR(TCLERR_SCOPE), NULL);
+  }
+  struct tcl_env *ref_env = tcl_env_scope(tcl, level);
+  assert(ref_env);
+  /* go through all variable pairs */
+  while (i + 1 < numargs && !ISERROR(r)) {
+    struct tcl_value *name = tcl_list_item(args, i);
+    assert(name);
+    struct tcl_value *alias = tcl_list_item(args, i + 1);
+    assert(alias);
+    if (tcl_findvar(tcl->env, tcl_data(alias)) != NULL) {
+      /* name for the alias already exists (as a local variable) */
+      r = tcl_error_result(tcl, MARKERROR(TCLERR_NAMEEXISTS), tcl_data(alias));
+    } else if (tcl_findvar(ref_env, tcl_data(name)) == NULL) {
+      /* reference variable does not exist (at the indicated scope) */
+      r = tcl_error_result(tcl, MARKERROR(TCLERR_VARUNKNOWN), tcl_data(name));
+    } else {
+      /* make local, find it back, mark it as an alias for a global */
+      tcl_var(tcl, tcl_data(alias), tcl_value("", 0));  /* make local */
+      struct tcl_var *var = tcl_findvar(tcl->env, tcl_data(alias));
+      if (var) {
+        var->env = ref_env; /* mark as an alias to the upvar */
+        var->alias = tcl_dup(name);
+      }
+    }
+    tcl_free(name);
+    tcl_free(alias);
+    i += 2;
+  }
+  if (i < numargs) {
+    r = tcl_error_result(tcl, MARKERROR(TCLERR_CMDARGCOUNT), "upvar"); /* there must be at least 2 arguments */
   }
   return r;
 }
@@ -1430,8 +1516,8 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
   int r = FERROR;
   if (SUBCMD(subcmd, "length") || SUBCMD(subcmd, "size")) {
     struct tcl_var *var = tcl_findvar(tcl->env, tcl_data(name));
-    if (var && var->global) { /* found local alias of a global variable; find the global */
-      var = tcl_findvar(tcl_global_env(tcl), tcl_data(name));
+    if (var && var->env) { /* found local alias of a global/upvar; find the global/upvar */
+      var = tcl_findvar(var->env, tcl_alias_name(var));
     }
     int count = 0;
     if (var) {
@@ -1483,8 +1569,8 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
         tcl_var(tcl, tcl_data(name), tcl_value(p, strlen(p)));
         var = tcl_findvar(tcl->env, tcl_data(name));
         assert(var);            /* if it didn't yet exist, it was just created */
-        if (var->global) {      /* found local alias of a global variable; find the global */
-          var = tcl_findvar(tcl_global_env(tcl), tcl_data(name));
+        if (var->env) {         /* found local alias of a global/upvar; find the global/upvar */
+          var = tcl_findvar(var->env, tcl_alias_name(var));
         }
         /* can immediately allocate the properly sized value list */
         int numelements = blen / step + 1;
@@ -1586,8 +1672,8 @@ static int tcl_cmd_lappend(struct tcl *tcl, struct tcl_value *args, void *arg) {
   /* check whether the value exists */
   struct tcl_value *name = tcl_list_item(args, 1);
   struct tcl_var *var = tcl_findvar(tcl->env, tcl_data(name));
-  if (var && var->global) { /* found local alias of a global variable; find the global */
-    var = tcl_findvar(tcl_global_env(tcl), tcl_data(name));
+  if (var && var->env) {    /* found local alias of a global/upvar; find the global/upvar */
+    var = tcl_findvar(var->env, tcl_alias_name(var));
   }
   struct tcl_value *list;
   if (var) {
@@ -2150,7 +2236,7 @@ static int tcl_user_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
     struct tcl_cmd *cmd = tcl_lookup_cmd(tcl, cmdname);
     tcl_free(cmdname);
     assert(cmd);  /* it just ran, so it must be found */
-    struct tcl_env *global_env = tcl_global_env(tcl);
+    struct tcl_env *global_env = tcl_env_scope(tcl, 0);
     global_env->errinfo.errorcode = tcl->env->errinfo.errorcode;
     global_env->errinfo.currentpos = cmd->declpos + error_offs;
   }
@@ -2175,7 +2261,7 @@ static int tcl_cmd_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
     int len = tcl_list_length(param);
     assert(len >= 0);
     if (len == 0 || is_varargs) {
-      r = tcl_error_result(tcl, MARKERROR(TCLERR_SYMNAME), tcl_data(param));    /* invalid name */
+      r = tcl_error_result(tcl, MARKERROR(TCLERR_NAMEINVALID), tcl_data(param));    /* invalid name */
     } else if ((len == 1 && defaultcount > 0) || len > 2) {
       r = tcl_error_result(tcl, MARKERROR(TCLERR_DEFAULTVAL), tcl_data(param)); /* parameters with default values must come behind parameters without defaults */
     } else if (len == 2) {
@@ -2195,7 +2281,7 @@ static int tcl_cmd_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
   struct tcl_cmd *cmd = tcl_register(tcl, tcl_data(name), tcl_user_proc, paramcount, max_params, tcl_dup(args));
   tcl_free(name);
   tcl_free(paramlist);
-  struct tcl_env *global_env = tcl_global_env(tcl);
+  struct tcl_env *global_env = tcl_env_scope(tcl, 0);
   cmd->declpos = global_env->errinfo.currentpos;
   return ISERROR(r) ? r : tcl_empty_result(tcl);
 }
@@ -2986,6 +3072,7 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "subst", tcl_cmd_subst, 2, 2, NULL);
   tcl_register(tcl, "switch", tcl_cmd_switch, 3, 0, NULL);
   tcl_register(tcl, "unset", tcl_cmd_unset, 2, 0, NULL);
+  tcl_register(tcl, "upvar", tcl_cmd_upvar, 2, 0, NULL);
   tcl_register(tcl, "while", tcl_cmd_while, 3, 3, NULL);
 # if !defined TCL_DISABLE_CLOCK
     tcl_register(tcl, "clock", tcl_cmd_clock, 2, 4, NULL);
@@ -3040,15 +3127,16 @@ const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, char *symbol, s
     /* TCLERR_CMDUNKNOWN */ "unknown command",
     /* TCLERR_CMDARGCOUNT */"wrong argument count on command",
     /* TCLERR_VARUNKNOWN */ "unknown variable name",
-    /* TCLERR_SYMNAME */    "invalid symbol name (variable or command)",
+    /* TCLERR_NAMEINVALID */"invalid symbol name (variable or command)",
+    /* TCLERR_NAMEEXISTS */ "duplicate symbol name (symbol already defined)",
     /* TCLERR_PARAM */      "incorrect (or missing) argument to a command",
     /* TCLERR_DEFAULTARG */ "incorrect default value on parameter",
-    /* TCLERR_SCOPE */      "scope error (e.g. command is allowed in local scope only)",
+    /* TCLERR_SCOPE */      "invalid scope (or command not valid at current scope)",
     /* TCLERR_SYS */        "system or run-time error",
     /* TCLERR_USER */       "user error",
   };
   assert(tcl);
-  struct tcl_env *global_env = tcl_global_env(tcl);
+  struct tcl_env *global_env = tcl_env_scope(tcl, 0);
   if (code) {
     *code = global_env->errinfo.errorcode;
   }

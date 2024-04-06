@@ -146,49 +146,50 @@ builtin command), but that same variable can still be used in string operations.
 
 ## Builtin commands
 
-| name   | summary |
-| ------ | ------- |
-| append | Append contents to a variable (concatenate strings). |
-| array  | Functions on array variables: `length` (same as `size`) and `slice`. |
-| binary | Binary-to-integer conversion (and vice versa), width subcommands `format` and `scan`. This command can be disabled using `#define TCL_DISABLE_BINARY`, for implementations that do not need to handle binary data. |
-| break  | Abort a loop, jumps to the first instruction following the loop. |
-| clock  | Time query and formatting functions, with subcommands `seconds` and `format`. This command can be disabled using `#define TCL_DISABLE_CLOCK`, for any context where it does not make sense. |
-| close  | Close a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
-| concat | Join multiple lists into a single list. |
+| name     | summary |
+| ------   | ------- |
+| append   | Append contents to a variable (concatenate strings). |
+| array    | Functions on array variables: `length` (same as `size`) and `slice`. |
+| binary   | Binary-to-integer conversion (and vice versa), width subcommands `format` and `scan`. This command can be disabled using `#define TCL_DISABLE_BINARY`, for implementations that do not need to handle binary data. |
+| break    | Abort a loop, jumps to the first instruction following the loop. |
+| clock    | Time query and formatting functions, with subcommands `seconds` and `format`. This command can be disabled using `#define TCL_DISABLE_CLOCK`, for any context where it does not make sense. |
+| close    | Close a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
+| concat   | Join multiple lists into a single list. |
 | continue | Skip the remainder of the loop body, jumps back to the condition of the loop. |
-| eof    | Check whether End-Of-File has been reached. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
-| exit   | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
-| expr   | Interpret the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
-| for    | Run a loop `for {setup} {condition} {post} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
-| foreach | Run a loop over all elements in a list. |
-| format | Format a string with placeholders, similar to `sprintf` in C. Currently only `%c`, `%d`, `%i`, `%x` and `%s` are supported, plus optional "padding" and "alignment" modifiers (e.g. `%04x` or `%-20s`). |
-| gets   | Read a line for a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
-| global | Mark any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
-| if     | Conditional execution, `if {cond} {then} {cond2} {then2} {else}`. |
-| incr   | Increment or decrements a variable. |
-| info   | Return some information on the Tcl interpreter, with subcommands `exists` and `tclversion`. Notably, `info exists var` returns 1 if the variable exists, and 0 otherwise. |
-| join   | Create a string from a list, by concatenating elements, with a separator chosen by the user. |
-| lappend | Append values to a variable (where the variable is presumed to contain a list). |
-| lindex | Return a specified element from the list. |
-| list   | Create a list from the values that follow it. |
-| llength | Return the number of elements in a list. |
-| lrange | Return a subset of a source list as a new list. |
+| eof      | Check whether End-Of-File has been reached. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
+| exit     | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
+| expr     | Interpret the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
+| for      | Run a loop `for {setup} {condition} {post} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
+| foreach  | Run a loop over all elements in a list. |
+| format   | Format a string with placeholders, similar to `sprintf` in C. Currently only `%c`, `%d`, `%i`, `%x` and `%s` are supported, plus optional "padding" and "alignment" modifiers (e.g. `%04x` or `%-20s`). |
+| gets     | Read a line for a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
+| global   | Mark any variable following it as a global variable. There may be a list of names, separated by spaces. Each name may not exists locally, and must already exists as a global variable. |
+| if       | Conditional execution, `if {cond} {then} {cond2} {then2} {else}`. |
+| incr     | Increment or decrements a variable. |
+| info     | Return some information on the Tcl interpreter, with subcommands `exists` and `tclversion`. Notably, `info exists var` returns 1 if the variable exists, and 0 otherwise. |
+| join     | Create a string from a list, by concatenating elements, with a separator chosen by the user. |
+| lappend  | Append values to a variable (where the variable is presumed to contain a list). |
+| lindex   | Return a specified element from the list. |
+| list     | Create a list from the values that follow it. |
+| llength  | Return the number of elements in a list. |
+| lrange   | Return a subset of a source list as a new list. |
 | lreplace | Delete a range of elements in a list and inserts a new set of elements at that position. |
-| open   | Open a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
-| proc   | Create a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
-| puts   | Print argument to the stdout, followed by a newline. This command can be disabled using both `#define TCL_DISABLE_PUTS` (for "stdout") and `#define TCL_DISABLE_FILEIO` (for output to file). |
-| read   | Read a file competely in memory. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
-| return | Jump out of the current command (`proc`), with an optional explicit return value. |
-| scan   | Parse a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
-| seek   | Set file read/write position. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
-| set    | Assign value to the variable and/or returns the current variable value. |
-| split  | Create a list from a string, by splitting the string on a separator chosen by the user. |
-| string | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
-| subst  | Perform command and variable substitution in the argument string. |
-| switch | Control flow structure, executing a block selected from matching one out of several patterns. |
-| tell   | Get the current file read/write position. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
-| unset  | Clear a variable (remove it completely). |
-| while  | Run a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
+| open     | Open a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
+| proc     | Create a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
+| puts     | Print argument to the stdout, followed by a newline. This command can be disabled using both `#define TCL_DISABLE_PUTS` (for "stdout") and `#define TCL_DISABLE_FILEIO` (for output to file). |
+| read     | Read a file competely in memory. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
+| return   | Jump out of the current command (`proc`), with an optional explicit return value. |
+| scan     | Parse a string and stores extracted values into variables. This command currently only supports `%c`, `%d`, `%i` and `%x` placeholders, plus optional "width" modifiers (e.g. `%2x`). |
+| seek     | Set file read/write position. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
+| set      | Assign value to the variable and/or returns the current variable value. |
+| split    | Create a list from a string, by splitting the string on a separator chosen by the user. |
+| string   | An assortment of string functions: `compare`, `equal`, `first`, `index`, `last`, `length`, `match`, `range`, `tolower`, `toupper`, `trim`, `trimleft`, `trimright`. |
+| subst    | Perform command and variable substitution in the argument string. |
+| switch   | Control flow structure, executing a block selected from matching one out of several patterns. |
+| tell     | Get the current file read/write position. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
+| unset    | Clear a variable (remove it completely). |
+| upvar    | Create an alias for a variable at a different scope, e.g. to implement pass-by-reference arguments. |
+| while    | Run a loop as long as the condition is true; `while {cond} {body}`. If the condition is already false on start, the body is never evaluated. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 
 ## Operator table
 
