@@ -9,10 +9,10 @@ static void check_eval(struct tcl *tcl, const char *s, char *expected) {
     tcl = &tmp;
     destroy = 1;
   } else {
-    tcl_errorinfo(tcl, NULL, NULL, NULL, 0);  /* make sure to clear error info. */
+    tcl_errorinfo(tcl, NULL, NULL, NULL);  /* make sure to clear error info. */
   }
   if (tcl_eval(tcl, s, strlen(s) + 1) == FERROR) {
-    FAIL("eval returned error: %s, (%s)\n", tcl_errorinfo(tcl, NULL, NULL, NULL, 0), s);
+    FAIL("eval returned error: %s, (%s)\n", tcl_errorinfo(tcl, NULL, NULL, NULL), s);
   } else if (strcmp(tcl_data(tcl->result), expected) != 0) {
     FAIL("Expected %s, but got %s. (%s)\n", expected, tcl_data(tcl->result),
          s);
@@ -72,8 +72,8 @@ static void test_subst() {
   check_eval(NULL, "set x {\n\thello\n}", "\n\thello\n");
 
   /* Some puts commands */
-  check_eval(NULL, "puts {[}[]hello[]{]}", "[hello]");
-  check_eval(NULL, "puts {{hello}}", "{hello}");
+  check_eval(NULL, "set abc {[}[]hello[]{]}", "[hello]");
+  check_eval(NULL, "set abc {{hello}}", "{hello}");
 
   /* XXX most command involving unpaired braces (e.g. in quotes) don't work
    * because of the dirty list implementation */

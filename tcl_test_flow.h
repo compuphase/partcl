@@ -8,9 +8,9 @@ static void test_flow() {
   printf("##########################\n");
   printf("\n");
 
-  check_eval(NULL, "if {1 < 2} {puts A} {puts B}", "A");
-  check_eval(NULL, "if {1 > 2} {puts A} {puts B}", "B");
-  check_eval(NULL, "if {1 > 2} {puts A}", "0");
+  check_eval(NULL, "if {1 < 2} {set v A} {set v B}", "A");
+  check_eval(NULL, "if {1 > 2} {set v A} {set v B}", "B");
+  check_eval(NULL, "if {1 > 2} {set v A}", "0");
 
   check_eval(NULL,
              "set x 0; if {$x == 0} {subst A} {$x == 1} {subst B} {subst C}",

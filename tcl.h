@@ -12,6 +12,7 @@ struct tcl {
   struct tcl_env *env;
   struct tcl_cmd *cmds;
   struct tcl_value *result;
+  struct tcl_value *errinfo;
 };
 
 
@@ -27,6 +28,7 @@ struct tcl {
 void tcl_init(struct tcl *tcl);
 
 /** tcl_destroy() cleans up the interpreter context, frees all memory.
+ *
  *  \param tcl      The interpreter context.
  */
 void tcl_destroy(struct tcl *tcl);
@@ -37,8 +39,7 @@ void tcl_destroy(struct tcl *tcl);
  *  \param string   The buffer with the script (or part of a script).
  *  \param length   The length of the buffer.
  *
- *  \return 0 on error, 1 on success; other non-zero codes are used internally
- *          (and may be assumed "success").
+ *  \return 0 on success, 1 on error; other codes are used internally.
  *
  *  \note On completion (of a successful run), the output of the script is
  *        stored in the "result" field of the "tcl" context. You can read this
@@ -50,45 +51,28 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length);
  *  of the script). This data is only valid if tcl_eval() returned success.
  *
  *  \param tcl      The interpreter context.
+ *
+ *  \note The return value is a pointer to the value in the context; it is not a
+ *        copy (and should not be freed). To clean-up the entire context, use
+ *        tcl_destroy().
  */
 struct tcl_value *tcl_return(struct tcl *tcl);
 
-/** tcl_errorpos() returns the error code/message and the (approximate) line
+/** tcl_errorinfo() returns the error code/message and the (approximate) line
  *  number of the error. The error information is cleared after this call.
  *
  *  \param tcl      The interpreter context.
- *  \param code     [out] The error code. This parameter may be set to NULL.
- *  \param errno    An optional error code set by the host. This parameter may
- *                  be set to NULL.
- *  \param line     [out] The line number (1-based). This parameter may be set
- *                  to NULL.
- *  \param symbol   [out] May contain extra information on the error (such as
+ *  \param code     [out] The numeric error code. This parameter may be set to
+ *                  NULL.
+ *  \param info     [out] May contain extra information on the error (such as
  *                  the name of a proc or variable). This parameter may be set
  *                  to NULL.
- *  \param symsize  The size of the buffer for "symbol". Should be set to 0 if
- *                  "symbol" is NULL.
+ *  \param line     [out] The (approximate) line number (1-based). This
+ *                  parameter may be set to NULL.
  *
- *  \return A pointer to a message describing the error code. It returns NULL if
- *          no error information is available.
+ *  \return A pointer to a message describing the error code.
  */
-const char *tcl_errorinfo(struct tcl *tcl, int *code, int *line, char *symbol, size_t symsize);
-enum {
-  TCLERR_GENERAL,     /**< unspecified error */
-  TCLERR_MEMORY,      /**< memory allocation error */
-  TCLERR_SYNTAX,      /**< general syntax error */
-  TCLERR_BRACES,      /**< unbalanced curly braces */
-  TCLERR_EXPR,        /**< error in expression */
-  TCLERR_CMDUNKNOWN,  /**< unknown command */
-  TCLERR_CMDARGCOUNT, /**< wrong argument count on command */
-  TCLERR_VARUNKNOWN,  /**< unknown variable name */
-  TCLERR_NAMEINVALID, /**< invalid symbol name */
-  TCLERR_NAMEEXISTS,  /**< symbol name already exists */
-  TCLERR_ARGUMENT,    /**< incorrect (or missing) argument to a command */
-  TCLERR_DEFAULTVAL,  /**< incorrect default value on parameter */
-  TCLERR_SCOPE,       /**< scope error (e.g. command is allowed in local scope only) */
-  TCLERR_SYS,         /**< host-specific error (e.g. file not found) */
-  TCLERR_USER,        /**< error set with the "error" command */
-};
+const char *tcl_errorinfo(struct tcl *tcl, int *code, const char **info, int *line);
 
 
 /* =========================================================================
@@ -132,6 +116,7 @@ size_t tcl_length(const struct tcl_value *value);
 tcl_int tcl_number(const struct tcl_value *value);
 
 /** tcl_value() creates a value from a C string or data block.
+ *
  *  \param data     The contents to store in the value. A copy is made of this
  *                  buffer.
  *  \param len      The length of the data.
@@ -143,6 +128,7 @@ tcl_int tcl_number(const struct tcl_value *value);
 struct tcl_value *tcl_value(const char *data, size_t len);
 
 /** tcl_free() deallocates a value or a list.
+ *
  *  \param v          The value.
  *
  *  \return This function always returns NULL.
@@ -158,6 +144,7 @@ struct tcl_value *tcl_free(struct tcl_value *v);
 struct tcl_value *tcl_list_new(void);
 
 /** tcl_list_length() returns the number of elements in a list.
+ *
  *  \param list       The list.
  *
  *  \return The number of elements in the list.
@@ -165,6 +152,7 @@ struct tcl_value *tcl_list_new(void);
 int tcl_list_length(const struct tcl_value *list);
 
 /** tcl_list_item() retrieves an element from the list.
+ *
  *  \param list       The list.
  *  \param index      The zero-based index of the element to retrieve.
  *
@@ -175,6 +163,7 @@ int tcl_list_length(const struct tcl_value *list);
 struct tcl_value *tcl_list_item(struct tcl_value *list, int index);
 
 /** tcl_list_append() appends an item to the list, and frees the item.
+ *
  *  \param list       The original list.
  *  \param tail       The item to append.
  *
@@ -190,16 +179,18 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail);
     Variables
    ========================================================================= */
 
-/** tcl_var() sets or reads a variable
+/** tcl_var() sets or reads a variable.
+ *
  *  \param tcl      The interpreter context.
  *  \param name     The name of the variable.
  *  \param value    The value to set the variable to, or NULL to read the value
  *                  of the variable. See notes below.
  *
- *  \return A pointer to the value in the variable. See notes below.
+ *  \return A pointer to the value in the variable. It may return NULL on
+ *          failure, see also the notes below.
  *
- *  \note When reading a variable that does not exist, an new variable is
- *        created, with empty contents.
+ *  \note When reading a variable that does not exist, the function sets an
+ *        error and returns NULL.
  *
  *  \note The returned pointer points to the value in the tcl_var structure; it
  *        is not a copy (and must not be freed or changed).
@@ -217,6 +208,7 @@ struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *v
 typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, struct tcl_value *args, void *user);
 
 /** tcl_register() registers a C function to the ParTcl command set.
+ *
  *  \param tcl      The interpreter context.
  *  \param name     The name of the command.
  *  \param fn       The function pointer.
@@ -234,6 +226,7 @@ typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, struct tcl_value *args, void *user)
 struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, unsigned short minargs, unsigned short maxargs, void *user);
 
 /** tcl_result() sets the result of a C function into the ParTcl environment.
+ *
  *  \param tcl      The interpreter context.
  *  \param flow     Should be set to 0 if an error occurred, or 1 on success
  *                  (other values for "flow" are used internally).
@@ -256,6 +249,7 @@ int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result);
 /** tcl_cur_scope() returns the current scope level. It is zero at the global
  *  level, and is incremented each time that a new local environment for a user
  *  procedure is allocated.
+ *
  *  \param tcl      The interpreter context.
  *
  *  \return The active scope.
@@ -264,6 +258,7 @@ int tcl_cur_scope(struct tcl *tcl);
 
 /** tcl_append() creates a new value that is the concatenation of the two
  *  parameters, and deletes the input parameters.
+ *
  *  \param value    The value to modify.
  *  \param tail     The data to append to parameter `value`.
  *

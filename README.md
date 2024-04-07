@@ -12,8 +12,10 @@ In pursuit of simplicitly and compactness of the implementation, ParTcl is close
 to the original versions of Tcl (pre 7.0), in syntax and is semantics, than to
 the lastest release (8.6, at the time of writing).
 
-Therefore, if you wish to pick up a book on Tcl, in order to make better use of
-ParTcl, old books are fine. See, for example, "[Tcl and the Tk Toolkit](http://csis.pace.edu/~benjamin/software/book1.pdf)"
+There is documentation in this repository in the form of a "Tcl Primer," a
+tutorial specific for ParTcl. For more details, or background information on
+Tcl, you can pick up a general book on Tcl. Old books are fine (because ParTcl
+draws back to the original Tcl). See, for example, "[Tcl and the Tk Toolkit](http://csis.pace.edu/~benjamin/software/book1.pdf)"
 by John Ousterhout, and which is available for free.
 
 ## Features
@@ -159,6 +161,7 @@ builtin command), but that same variable can still be used in string operations.
 | eof      | Check whether End-Of-File has been reached. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
 | exit     | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
 | expr     | Interpret the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
+| file     | An assortment of file information functions: `dirname`, `exists`, `extension`, `isdirectory`, `isfile`, `rootname`, `size` and `tail`. This command can be disabled using `#define TCL_DISABLE_FILEIO`, which is handy for embedded systems without file system. |
 | for      | Run a loop `for {setup} {condition} {post} {body}`. One may use `break`, `continue` (or `return`) inside the loop to contol the flow. |
 | foreach  | Run a loop over all elements in a list. |
 | format   | Format a string with placeholders, similar to `sprintf` in C. Currently only `%c`, `%d`, `%i`, `%x` and `%s` are supported, plus optional "padding" and "alignment" modifiers (e.g. `%04x` or `%-20s`). |
