@@ -268,4 +268,12 @@ int tcl_cur_scope(struct tcl *tcl);
  */
 bool tcl_append(struct tcl_value *value, struct tcl_value *tail);
 
+
+/* =========================================================================
+    Dynamic memory
+   ========================================================================= */
+
+#define _malloc(n)  malloc(n)
+#define _free(p)    free(p)
+
 #endif /* _TCL_H */

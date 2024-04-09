@@ -26,7 +26,7 @@ by John Ousterhout, and which is available for free.
 * Flexible and easy-to-use interface to C/C++ programs, can be extended with custom Tcl commands.
 * Runs on bare metal embedded MCUs &mdash;though, dynamic memory allocation of some kind, &agrave;-la `malloc()` &amp; `free()`, is required.
 * A decent number of built-in commands; some less-essential commands can be removed on compilation (by setting a macro).
-* Arithmetic in 64-bit integers.
+* Integer arithmetic only, word size is configurable (default is 64-bit integers).
 
 ## Usage
 
@@ -272,6 +272,10 @@ management can be complex, so all operations with Tcl values are moved into
 isolated functions that can be rewritten to optimize certain parts (e.g.
 to use a pool of strings, a custom memory allocator, cache numerical or list
 values to increase performance etc).
+
+The `tcl.h` file defines the macros `_malloc` and `_free` (which by default are
+mapped to `malloc` and `free`). You can redefine these macros to switch to a
+different memory allocator.
 
 ```
 /* Functions calling malloc() or free() */

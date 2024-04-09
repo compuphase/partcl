@@ -308,8 +308,8 @@ tcl_int tcl_number(const struct tcl_value *value) {
 
 struct tcl_value *tcl_free(struct tcl_value *value) {
   assert(value && value->data);
-  free(value->data);
-  free(value);
+  _free(value->data);
+  _free(value);
   return NULL;
 }
 
@@ -326,12 +326,12 @@ bool tcl_append(struct tcl_value *value, struct tcl_value *tail) {
     while (newsize < needed) {
       newsize *= 2;
     }
-    char *b = malloc(newsize);
+    char *b = _malloc(newsize);
     if (b) {
       if (tcl_length(value) > 0) {
         memcpy(b, tcl_data(value), tcl_length(value));
       }
-      free(value->data);
+      _free(value->data);
       value->data = b;
       value->size = newsize;
     }
@@ -346,20 +346,20 @@ bool tcl_append(struct tcl_value *value, struct tcl_value *tail) {
 }
 
 struct tcl_value *tcl_value(const char *data, size_t len) {
-  struct tcl_value *value = malloc(sizeof(struct tcl_value));
+  struct tcl_value *value = _malloc(sizeof(struct tcl_value));
   if (value) {
     size_t size = 8;
     while (size < len + 1) {
       size *= 2;
     }
-    value->data = malloc(size);
+    value->data = _malloc(size);
     if (value->data) {
       memcpy(value->data, data, len);
       value->data[len] = '\0';  /* set EOS */
       value->length = len;
       value->size = size;
     } else {
-      free(value);
+      _free(value);
       value = NULL;
     }
   }
@@ -439,13 +439,13 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail) {
     while (newsize < needed) {
       newsize *= 2;
     }
-    char *newbuf = malloc(newsize);
+    char *newbuf = _malloc(newsize);
     if (!newbuf) {
       tcl_free(tail);
       return false;
     }
     memcpy(newbuf, tcl_data(list), tcl_length(list));
-    free(list->data);
+    _free(list->data);
     list->data = newbuf;
     list->size = newsize;
   }
@@ -530,14 +530,14 @@ struct tcl_var {
 };
 
 static struct tcl_env *tcl_env_alloc(struct tcl_env *parent) {
-  struct tcl_env *env = malloc(sizeof(struct tcl_env));
+  struct tcl_env *env = _malloc(sizeof(struct tcl_env));
   memset(env, 0, sizeof(struct tcl_env));
   env->parent = parent;
   return env;
 }
 
 static struct tcl_var *tcl_env_var(struct tcl_env *env, const char *name) {
-  struct tcl_var *var = malloc(sizeof(struct tcl_var));
+  struct tcl_var *var = _malloc(sizeof(struct tcl_var));
   if (var) {
     memset(var, 0, sizeof(struct tcl_var));
     assert(name);
@@ -545,13 +545,13 @@ static struct tcl_var *tcl_env_var(struct tcl_env *env, const char *name) {
     tcl_var_index(name, &namesz);
     var->name = tcl_value(name, namesz);
     var->elements = 1;
-    var->value = malloc(var->elements * sizeof(struct tcl_value*));
+    var->value = _malloc(var->elements * sizeof(struct tcl_value*));
     if (var->value) {
       var->value[0] = tcl_value("", 0);
       var->next = env->vars;
       env->vars = var;
     } else {
-      free(var);
+      _free(var);
       var = NULL;
     }
   }
@@ -565,7 +565,7 @@ static void tcl_var_free_values(struct tcl_var *var) {
       tcl_free(var->value[idx]);
     }
   }
-  free(var->value);
+  _free(var->value);
 }
 
 static struct tcl_env *tcl_env_free(struct tcl_env *env) {
@@ -578,9 +578,9 @@ static struct tcl_env *tcl_env_free(struct tcl_env *env) {
     if (var->alias) {
       tcl_free(var->alias);
     }
-    free(var);
+    _free(var);
   }
-  free(env);
+  _free(env);
   return parent;
 }
 
@@ -668,11 +668,11 @@ struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *v
     while (newsize <= idx) {
       newsize *= 2;
     }
-    struct tcl_value **newlist = malloc(newsize * sizeof(struct tcl_value*));
+    struct tcl_value **newlist = _malloc(newsize * sizeof(struct tcl_value*));
     if (newlist) {
       memset(newlist, 0, newsize * sizeof(struct tcl_value*));
       memcpy(newlist, var->value, var->elements * sizeof(struct tcl_value*));
-      free(var->value);
+      _free(var->value);
       var->value = newlist;
       var->elements = newsize;
     } else {
@@ -710,7 +710,7 @@ static void tcl_var_free(struct tcl_env *env, struct tcl_var *var) {
   if (var->alias) {
     tcl_free(var->alias);
   }
-  free(var);
+  _free(var);
 }
 
 int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result) {
@@ -756,7 +756,7 @@ static int tcl_error_result(struct tcl *tcl, int code, const char *info) {
     size_t len = strlen(errmsg[code]) + 1;  /* +1 for '\0' */
     if (info) {
       len += strlen(info) + 2;  /* +2 for ": " */
-      char *msg = malloc(len);
+      char *msg = _malloc(len);
       if (msg) {
         strcpy(msg, errmsg[code]);
         if (info) {
@@ -767,7 +767,7 @@ static int tcl_error_result(struct tcl *tcl, int code, const char *info) {
           tcl_free(tcl->errinfo);
         }
         tcl->errinfo = tcl_value(msg, len);
-        free(msg);
+        _free(msg);
       }
     }
     /* create a global variable that holds a copy of the error info */
@@ -1017,7 +1017,7 @@ static int tcl_expression(struct tcl *tcl, const char *expression, tcl_int *resu
 struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
                              unsigned short minargs, unsigned short maxargs,
                              void *user) {
-  struct tcl_cmd *cmd = malloc(sizeof(struct tcl_cmd));
+  struct tcl_cmd *cmd = _malloc(sizeof(struct tcl_cmd));
   if (cmd) {
     memset(cmd, 0, sizeof(struct tcl_cmd));
     cmd->name = tcl_value(name, strlen(name));
@@ -1232,7 +1232,7 @@ static int tcl_cmd_scan(struct tcl *tcl, struct tcl_value *args, void *arg) {
 static int tcl_cmd_format(struct tcl *tcl, struct tcl_value *args, void *arg) {
   (void)arg;
   size_t bufsize = 256;
-  char *buffer = malloc(bufsize);
+  char *buffer = _malloc(bufsize);
   if (!buffer) {
     return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
   }
@@ -1306,10 +1306,10 @@ static int tcl_cmd_format(struct tcl *tcl, struct tcl_value *args, void *arg) {
       while (buflen + fieldlen + 1 >= newsize) {
         newsize *= 2;
       }
-      char *newbuf = malloc(newsize);
+      char *newbuf = _malloc(newsize);
       if (newbuf) {
         memcpy(newbuf, buffer, buflen);
-        free(buffer);
+        _free(buffer);
         buffer = newbuf;
         bufsize = newsize;
       }
@@ -1337,7 +1337,7 @@ static int tcl_cmd_format(struct tcl *tcl, struct tcl_value *args, void *arg) {
   }
   tcl_free(format);
   int r = tcl_result(tcl, FNORMAL, tcl_value(buffer, buflen));
-  free(buffer);
+  _free(buffer);
   return r;
 }
 
@@ -1653,12 +1653,12 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
         }
         /* can immediately allocate the properly sized value list */
         int numelements = blen / step + 1;
-        struct tcl_value **newlist = malloc(numelements * sizeof(struct tcl_value*));
+        struct tcl_value **newlist = _malloc(numelements * sizeof(struct tcl_value*));
         if (newlist) {
           memset(newlist, 0, numelements * sizeof(struct tcl_value*));
           assert(var->elements == 1);
           newlist[0] = var->value[0];
-          free(var->value);
+          _free(var->value);
           var->value = newlist;
           var->elements = numelements;
         } else {
@@ -1971,7 +1971,7 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
       }
       datalen+=width*count;
     }
-    char *rawdata = malloc(datalen);
+    char *rawdata = _malloc(datalen);
     if (rawdata != NULL) {
       int dataidx = 0;
       unsigned width, count = 0;
@@ -1999,7 +1999,7 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
         count--;
       }
       r = tcl_result(tcl, FNORMAL, tcl_value(rawdata, datalen));
-      free(rawdata);
+      _free(rawdata);
     } else {
       r = tcl_error_result(tcl, TCLERR_MEMORY, NULL);
     }
@@ -2007,7 +2007,7 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
     /* syntax "binary scan data fmt var ..." */
     struct tcl_value *data = tcl_list_item(args, 2);
     size_t datalen = tcl_length(data);
-    char *rawdata = malloc(datalen);  /* make a copy of the data */
+    char *rawdata = _malloc(datalen);  /* make a copy of the data */
     if (rawdata == NULL) {
       tcl_free(subcmd);
       tcl_free(fmt);
@@ -2030,7 +2030,7 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
       if (!binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian)) {
         tcl_free(subcmd);
         tcl_free(fmt);
-        free(rawdata);
+        _free(rawdata);
         return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
       }
       /* get & format the data */
@@ -2078,7 +2078,7 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
         cvtcount++;
       }
     }
-    free(rawdata);
+    _free(rawdata);
     r = tcl_numeric_result(tcl, FNORMAL, cvtcount);
   } else {
     r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
@@ -2258,14 +2258,14 @@ static int tcl_cmd_read(struct tcl *tcl, struct tcl_value *args, void *arg) {
   if (bytecount <= 0) {
     return tcl_error_result(tcl, TCLERR_FILEIO, "negative bytecount argument");
   }
-  char *buffer = malloc(bytecount);
+  char *buffer = _malloc(bytecount);
   if (buffer == NULL) {
     return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
   }
   size_t count = fread(buffer, 1, bytecount, fp);
   assert(count <= (unsigned)bytecount); /* can be smaller when \r\n is translated to \n */
   struct tcl_value *result = tcl_value(buffer, count);
-  free(buffer);
+  _free(buffer);
   return tcl_result(tcl, FNORMAL, result);
 }
 
@@ -3318,7 +3318,7 @@ void tcl_destroy(struct tcl *tcl) {
     if (cmd->fn == tcl_user_proc) {
       tcl_free((struct tcl_value*)cmd->user);
     }
-    free(cmd);
+    _free(cmd);
   }
   tcl_free(tcl->result);
   if (tcl->errinfo) {
