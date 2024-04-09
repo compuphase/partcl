@@ -13,6 +13,7 @@ struct tcl {
   struct tcl_cmd *cmds;
   struct tcl_value *result;
   struct tcl_value *errinfo;
+  int errcode;
 };
 
 
@@ -62,17 +63,13 @@ struct tcl_value *tcl_return(struct tcl *tcl);
  *  number of the error. The error information is cleared after this call.
  *
  *  \param tcl      The interpreter context.
- *  \param code     [out] The numeric error code. This parameter may be set to
- *                  NULL.
- *  \param info     [out] May contain extra information on the error (such as
- *                  the name of a proc or variable). This parameter may be set
- *                  to NULL.
  *  \param line     [out] The (approximate) line number (1-based). This
  *                  parameter may be set to NULL.
  *
- *  \return A pointer to a message describing the error code.
+ *  \return A pointer to a message describing the error code. When no error was
+ *          registered, the function returns an empty string.
  */
-const char *tcl_errorinfo(struct tcl *tcl, int *code, const char **info, int *line);
+const char *tcl_errorinfo(struct tcl *tcl, int *line);
 
 
 /* =========================================================================

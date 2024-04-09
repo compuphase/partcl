@@ -1,5 +1,3 @@
-#include <stdio.h>
-
 #include "tcl.c"
 
 int status = 0;

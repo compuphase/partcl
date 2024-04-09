@@ -1,5 +1,5 @@
 CC ?= clang
-CFLAGS ?= -Os -Wall -Wextra -std=c99 -pedantic
+CFLAGS ?= -Os -Wall -Wextra -std=c11 -pedantic
 LDFLAGS ?= -Os
 
 TCLBIN := tcl
@@ -11,11 +11,12 @@ TCLTESTBIN := tcl_test
 
 all: $(TCLBIN) test
 tcl: tcl.o
+	$(CC) $(LDFLAGS) $< -lbsd
 
 test: $(TCLTESTBIN)
 	./tcl_test
 $(TCLTESTBIN): tcl_test.o
-	$(TEST_CC) $(TEST_LDFLAGS) -o $@ $^
+	$(TEST_CC) $(TEST_LDFLAGS) -o $@ $^ -lbsd
 tcl_test.o: tcl_test.c tcl.c \
 	tcl_test_lexer.h tcl_test_subst.h tcl_test_flow.h tcl_test_math.h
 	$(TEST_CC) $(TEST_CFLAGS) -c tcl_test.c -o $@
