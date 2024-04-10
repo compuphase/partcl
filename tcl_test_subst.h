@@ -9,10 +9,10 @@ static void check_eval(struct tcl *tcl, const char *s, char *expected) {
     tcl = &tmp;
     destroy = 1;
   } else {
-    tcl_errorinfo(tcl, NULL, NULL, NULL);  /* make sure to clear error info. */
+    tcl_errorinfo(tcl, NULL);  /* make sure to clear error info. */
   }
   if (tcl_eval(tcl, s, strlen(s) + 1) == FERROR) {
-    FAIL("eval returned error: %s, (%s)\n", tcl_errorinfo(tcl, NULL, NULL, NULL), s);
+    FAIL("eval returned error: %s, (%s)\n", tcl_errorinfo(tcl, NULL), s);
   } else if (strcmp(tcl_data(tcl->result), expected) != 0) {
     FAIL("Expected %s, but got %s. (%s)\n", expected, tcl_data(tcl->result),
          s);
