@@ -3568,7 +3568,6 @@ void tcl_init(struct tcl *tcl) {
   tcl_register(tcl, "return", tcl_cmd_flow, 0, 0, 1, NULL);
   tcl_register(tcl, "scan", tcl_cmd_scan, 0, 2, -1, NULL);
   tcl_register(tcl, "set", tcl_cmd_set, 0, 1, 2, NULL);
-  tcl_register(tcl, "source", tcl_cmd_source, 0, 1, 1, NULL);
   tcl_register(tcl, "split", tcl_cmd_split, 0, 1, 2, NULL);
   tcl_register(tcl, "string", tcl_cmd_string, 1, 1, 4, tcl_value_string("-nocase"));
   tcl_register(tcl, "subst", tcl_cmd_subst, 0, 1, 1, NULL);
@@ -3592,6 +3591,9 @@ void tcl_init(struct tcl *tcl) {
     tcl_register(tcl, "tell", tcl_cmd_tell, 0, 1, 1, NULL);
 # elif !defined TCL_DISABLE_PUTS
     tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value_string("-nonewline"));
+# endif
+# if !defined TCL_DISABLE_SOURCE
+    tcl_register(tcl, "source", tcl_cmd_source, 0, 1, 1, NULL);
 # endif
 # if !defined TCL_DISABLE_BINARY
     tcl_register(tcl, "binary", tcl_cmd_binary, 1, 2, -1, NULL);
