@@ -1,3 +1,27 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) 2016 Serge Zaitsev
+Portions copyright (c) 2023-2024 Thiadmer Riemersma, CompuPhase
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 #ifndef _TCL_H
 #define _TCL_H
 
@@ -15,7 +39,6 @@ struct tcl {
   struct tcl_value *errinfo;
   int errcode;
 };
-
 
 
 /* =========================================================================
@@ -157,7 +180,7 @@ int tcl_list_length(const struct tcl_value *list);
  *
  *  \note The returned element is a copy, which must be freed with tcl_free().
  */
-struct tcl_value *tcl_list_item(struct tcl_value *list, int index);
+struct tcl_value *tcl_list_item(const struct tcl_value *list, int index);
 
 /** tcl_list_append() appends an item to the list, and frees the item.
  *
@@ -202,25 +225,45 @@ struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *v
     User commands
    ========================================================================= */
 
-typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, struct tcl_value *args, void *user);
+typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user);
 
 /** tcl_register() registers a C function to the ParTcl command set.
  *
  *  \param tcl      The interpreter context.
  *  \param name     The name of the command.
  *  \param fn       The function pointer.
- *  \param minargs  The minimum number of parameters of the command, which
- *                  includes the command name itself (so the lowest valie value
- *                  is 1).
+ *  \param subcmds  How many subcommands the command has; zero for none.
+ *  \param minargs  The minimum number of parameters of the command. This value
+ *                  excludes the number of subcommands.
  *  \param maxargs  The maximum number of parameters of the command, which
- *                  includes the command name itself. Set this to zero for a
- *                  variable argument list.
- *  \param user     A user value (which is passed to the C function); normally
- *                  set to NULL.
+ *                  includes the command name itself. Set this to -1 for a
+ *                  variable argument list. This value does typically *not*
+ *                  include switches, see the notes below.
+ *  \param user     A user value or list. It is typically used to pass a list of
+ *                  switches that a command supports. It may also be used for
+ *                  other purposes, or it be set to NULL. See the notes.
  *
  *  \return A pointer to the command structure that was just added.
+ *
+ *  \note If the `user` parameter in tcl_register() contains a list of switches,
+ *        and if the call to the command has one or more switches, then these
+ *        switches are removed from the argument list, and added to a new list,
+ *        which is then passed as the third argument (`user`) in the C functon.
+ *        That is, the C function has all standard arguments in the `args`
+ *        parameter, and all switches in the `user` parameter.
+ *
+ *        All switches must precede normal arguments (but come behind any
+ *        subcommand). When an argument is not recognized as a switch, it is
+ *        assumed to be a normal argument. All arguments behind it, are then
+ *        also assumed to be normal arguments.
+ *
+ *  \note If the `user` parameter does *not* contain a list of switches, it is
+ *        passed to the C function unmodified (in the `user` parameter of the C
+ *        function).
  */
-struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn, unsigned short minargs, unsigned short maxargs, void *user);
+struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
+                             short subcmds, short minargs, short maxargs,
+                             struct tcl_value *user);
 
 /** tcl_result() sets the result of a C function into the ParTcl environment.
  *

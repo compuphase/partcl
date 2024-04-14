@@ -2,9 +2,7 @@
 The MIT License (MIT)
 
 Copyright (c) 2016 Serge Zaitsev
-
-Nota Bene: this is a fork of the original version by Thiadmer Riemersma, with
-many changes.
+Portions copyright (c) 2023-2024 Thiadmer Riemersma, CompuPhase
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -40,8 +38,11 @@ SOFTWARE.
     size_t strlcat(char *dst, const char *src, size_t size);
     size_t strlcpy(char *dst, const char *src, size_t size);
 # endif
-#elif defined __linux__
-# include <bsd/string.h>
+#else
+# if defined __linux__
+#   include <bsd/string.h>
+# endif
+# define stricmp(s1, s2)  strcasecmp((s1), (s2))
 #endif
 
 #if defined FORTIFY
@@ -364,6 +365,10 @@ struct tcl_value *tcl_value(const char *data, size_t len) {
   return value;
 }
 
+struct tcl_value *tcl_value_string(const char *data) {
+  return tcl_value(data, strlen(data));
+}
+
 static struct tcl_value *tcl_dup(const struct tcl_value *value) {
   assert(value);
   return tcl_value(tcl_data(value), tcl_length(value));
@@ -402,7 +407,7 @@ static bool tcl_list_item_ptr(const struct tcl_value *list, int index, const cha
   return false;
 }
 
-struct tcl_value *tcl_list_item(struct tcl_value *list, int index) {
+struct tcl_value *tcl_list_item(const struct tcl_value *list, int index) {
   const char *data;
   size_t sz;
   if (tcl_list_item_ptr(list, index, &data, &sz))
@@ -498,10 +503,11 @@ static int tcl_var_index(const char *name, size_t *baselength);
 
 struct tcl_cmd {
   struct tcl_value *name; /**< function name */
-  unsigned short minargs; /**< minimum number of parameters (including function name) */
-  unsigned short maxargs; /**< maximum number of parameters, USHRT_MAX = no maximum */
   tcl_cmd_fn_t fn;        /**< function pointer */
-  void *user;             /**< user value, used for the code block for Tcl procs */
+  unsigned short subcmds; /**< how many subcommand levels there are, 0 for none */
+  unsigned short minargs; /**< minimum number of words for the command (including command & subcommand, excluding options) */
+  unsigned short maxargs; /**< maximum number of words for the command, USHRT_MAX = no maximum */
+  struct tcl_value *user; /**< user value, used for the code block for Tcl procs & option list for built-ins */
   const char *declpos;    /**< position of declaration (Tcl procs) */
   struct tcl_cmd *next;
 };
@@ -721,7 +727,7 @@ int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result) {
 static int tcl_numeric_result(struct tcl *tcl, int flow, tcl_int result) {
   char buf[64] = "";
   const char *ptr = tcl_int2string(buf, sizeof(buf), 10, result);
-  return tcl_result(tcl, flow, tcl_value(ptr, strlen(ptr)));
+  return tcl_result(tcl, flow, tcl_value_string(ptr));
 }
 
 static int tcl_error_result(struct tcl *tcl, int code, const char *info) {
@@ -919,21 +925,87 @@ static struct tcl_cmd *tcl_lookup_cmd(struct tcl *tcl, struct tcl_value *name) {
   return NULL;
 }
 
-static int tcl_exec_cmd(struct tcl *tcl, struct tcl_value *list) {
+static int tcl_exec_cmd(struct tcl *tcl, const struct tcl_value *list) {
   struct tcl_value *cmdname = tcl_list_item(list, 0);
   struct tcl_cmd *cmd = tcl_lookup_cmd(tcl, cmdname);
   int r;
   if (cmd) {
+    /* see whether to split off the switches */
+    bool has_optlist = (cmd->user && *tcl_data(cmd->user) == '-');
+    struct tcl_value *optlist = NULL;
+    struct tcl_value *arglist = NULL;
     unsigned numargs = tcl_list_length(list);
+    if (has_optlist && numargs > cmd->minargs) {
+      unsigned maxopts = numargs - cmd->minargs;
+      unsigned numopts = tcl_list_length(cmd->user);
+      unsigned count = 0;
+      unsigned skipopt = 0;
+      for (unsigned i = 0; i < maxopts; i++) {
+        struct tcl_value *arg = tcl_list_item(list, i + cmd->subcmds);
+        bool is_option = (*tcl_data(arg) == '-');
+        if (is_option) {
+          if (strcmp(tcl_data(arg), "--") == 0) {
+            skipopt = 1;  /* special case, "--" marks the end of the switches in an argument list */
+          }
+          for (unsigned n = 0; n < numopts; n++) {
+            struct tcl_value *opt = tcl_list_item(cmd->user, n);
+            if (strcmp(tcl_data(arg), tcl_data(opt)) == 0)
+              count++;
+            tcl_free(opt);
+          }
+        }
+        tcl_free(arg);
+        if (!is_option || skipopt) {
+          break;
+        }
+      }
+      if (count > 0) {
+        /* move first count elements from the argument list to the option list,
+           but keep the command (and subcommand) */
+        optlist = tcl_list_new();
+        arglist = tcl_list_new();
+        for (unsigned i = 0; i < cmd->subcmds; i++) {
+          tcl_list_append(arglist, tcl_list_item(list, i));
+        }
+        for (unsigned i = 0; i < count; i++) {
+          tcl_list_append(optlist, tcl_list_item(list, i + cmd->subcmds));
+        }
+        for (unsigned i = count + cmd->subcmds; i < numargs; i++) {
+          tcl_list_append(arglist, tcl_list_item(list, i));
+        }
+        numargs -= count;
+      }
+    }
     if (cmd->minargs <= numargs && numargs <= cmd->maxargs)
-      r = cmd->fn(tcl, list, cmd->user);
+      r = cmd->fn(tcl, arglist ? arglist : list, has_optlist ? optlist : cmd->user);
     else
       r = tcl_error_result(tcl, TCLERR_CMDARGCOUNT, tcl_data(cmdname));
+    if (optlist) {
+      tcl_free(optlist);
+    }
+    if (arglist) {
+      tcl_free(arglist);
+    }
   } else {
     r = tcl_error_result(tcl, TCLERR_CMDUNKNOWN, tcl_data(cmdname));
   }
   tcl_free(cmdname);
   return r;
+}
+
+static bool tcl_checkoption(const struct tcl_value *options, const char *optname) {
+  if (!options) {
+    return false;
+  }
+  int n = tcl_list_length(options);
+  bool found = false;
+  assert(optname);
+  for (int i = 0; i < n && !found; i++) {
+    struct tcl_value *v = tcl_list_item(options, i);
+    found = (strcmp(tcl_data(v), optname) == 0);
+    tcl_free(v);
+  }
+  return found;
 }
 
 int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
@@ -1013,24 +1085,26 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
 static int tcl_expression(struct tcl *tcl, const char *expression, tcl_int *result); /* forward declaration */
 
 struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
-                             unsigned short minargs, unsigned short maxargs,
-                             void *user) {
+                             short subcmds, short minargs, short maxargs,
+                             struct tcl_value *user) {
+  assert(maxargs == -1 || maxargs >= minargs);
   struct tcl_cmd *cmd = _malloc(sizeof(struct tcl_cmd));
   if (cmd) {
     memset(cmd, 0, sizeof(struct tcl_cmd));
-    cmd->name = tcl_value(name, strlen(name));
+    cmd->name = tcl_value_string(name);
     cmd->fn = fn;
     cmd->user = user;
-    cmd->minargs = minargs;
-    cmd->maxargs = (maxargs == 0) ? USHRT_MAX : maxargs;
+    cmd->subcmds = subcmds;
+    cmd->minargs = minargs + subcmds + 1; /* + 1 for command itself */
+    cmd->maxargs = (maxargs < 0) ? USHRT_MAX : maxargs + subcmds + 1;
     cmd->next = tcl->cmds;
     tcl->cmds = cmd;
   }
   return cmd;
 }
 
-static int tcl_cmd_set(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_set(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *name = tcl_list_item(args, 1);
   assert(name);
   struct tcl_value *val = tcl_list_item(args, 2);
@@ -1039,8 +1113,8 @@ static int tcl_cmd_set(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return val ? tcl_result(tcl, FNORMAL, tcl_dup(val)) : tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
 }
 
-static int tcl_cmd_unset(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_unset(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int n = tcl_list_length(args);
   for (int i = 1; i < n; i++) {
     struct tcl_value *name = tcl_list_item(args, 1);
@@ -1058,8 +1132,8 @@ static int tcl_cmd_unset(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_empty_result(tcl);
 }
 
-static int tcl_cmd_global(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_global(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   if (!tcl->env->parent) {
     return tcl_error_result(tcl, TCLERR_SCOPE, NULL);
   }
@@ -1092,8 +1166,8 @@ static int tcl_cmd_global(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_upvar(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_upvar(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int r = FNORMAL;
   int numargs = tcl_list_length(args);
   int i = 1;
@@ -1153,16 +1227,16 @@ static int tcl_cmd_upvar(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_subst(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_subst(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *s = tcl_list_item(args, 1);
   int r = tcl_subst(tcl, tcl_data(s), tcl_length(s));
   tcl_free(s);
   return r;
 }
 
-static int tcl_cmd_scan(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_scan(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *string = tcl_list_item(args, 1);
   struct tcl_value *format = tcl_list_item(args, 2);
   assert(string && format);
@@ -1212,7 +1286,7 @@ static int tcl_cmd_scan(struct tcl *tcl, struct tcl_value *args, void *arg) {
       struct tcl_value *var = tcl_list_item(args, match + 2);
       if (var) {
         const char *p = tcl_int2string(buf, sizeof buf, 10, v);
-        tcl_var(tcl, tcl_data(var), tcl_value(p, strlen(p)));
+        tcl_var(tcl, tcl_data(var), tcl_value_string(p));
       }
       tcl_free(var);
     } else if (*fptr == *sptr) {
@@ -1227,8 +1301,8 @@ static int tcl_cmd_scan(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_numeric_result(tcl, FNORMAL, match);
 }
 
-static int tcl_cmd_format(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_format(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   size_t bufsize = 256;
   char *buffer = _malloc(bufsize);
   if (!buffer) {
@@ -1339,8 +1413,8 @@ static int tcl_cmd_format(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_incr(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_incr(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int val = 1;
   if (tcl_list_length(args) == 3) {
     struct tcl_value *incr = tcl_list_item(args, 2);
@@ -1354,14 +1428,14 @@ static int tcl_cmd_incr(struct tcl *tcl, struct tcl_value *args, void *arg) {
   if (v) {
     char buf[64];
     p = tcl_int2string(buf, sizeof buf, 10, tcl_number(v) + val);
-    tcl_var(tcl, tcl_data(name), tcl_value(p, strlen(p)));
+    tcl_var(tcl, tcl_data(name), tcl_value_string(p));
   }
   tcl_free(name);
-  return tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p)));
+  return tcl_result(tcl, FNORMAL, tcl_value_string(p));
 }
 
-static int tcl_cmd_append(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_append(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int nargs = tcl_list_length(args);
   struct tcl_value *name = tcl_list_item(args, 1);
   assert(name);
@@ -1426,8 +1500,14 @@ static bool tcl_fnmatch(const char *pattern, const char *string) {
   return false;
 }
 
-static int tcl_cmd_string(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static bool tcl_match(bool exact, const char *pattern, const char *string) {
+  if (exact) {
+    return (strcmp(pattern, string) == 0);
+  }
+  return tcl_fnmatch(pattern, string);
+}
+
+static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   int nargs = tcl_list_length(args);
   int r = FERROR;
   struct tcl_value *subcmd = tcl_list_item(args, 1);
@@ -1473,9 +1553,15 @@ static int tcl_cmd_string(struct tcl *tcl, struct tcl_value *args, void *arg) {
     }
     struct tcl_value *arg2 = tcl_list_item(args, 3);
     if (SUBCMD(subcmd, "compare")) {
-      r = tcl_numeric_result(tcl, FNORMAL, strcmp(tcl_data(arg1), tcl_data(arg2)));
+      int match = tcl_checkoption(user, "-nocase")
+                    ? stricmp(tcl_data(arg1), tcl_data(arg2))
+                    : strcmp(tcl_data(arg1), tcl_data(arg2));
+      r = tcl_numeric_result(tcl, FNORMAL, match);
     } else if (SUBCMD(subcmd, "equal")) {
-      r = tcl_numeric_result(tcl, FNORMAL, strcmp(tcl_data(arg1), tcl_data(arg2)) == 0);
+      int match = tcl_checkoption(user, "-nocase")
+                    ? stricmp(tcl_data(arg1), tcl_data(arg2))
+                    : strcmp(tcl_data(arg1), tcl_data(arg2));
+      r = tcl_numeric_result(tcl, FNORMAL, match == 0);
     } else if (SUBCMD(subcmd, "first") || SUBCMD(subcmd, "last")) {
       int pos = 0;
       if (nargs >= 5) {
@@ -1567,8 +1653,8 @@ static int tcl_cmd_string(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_info(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_info(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int nargs = tcl_list_length(args);
   struct tcl_value *subcmd = tcl_list_item(args, 1);
   int r = FERROR;
@@ -1590,8 +1676,8 @@ static int tcl_cmd_info(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_array(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int nargs = tcl_list_length(args);
   struct tcl_value *subcmd = tcl_list_item(args, 1);
   struct tcl_value *name = tcl_list_item(args, 2);
@@ -1648,7 +1734,7 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
       const char *p = tcl_int2string(buf, sizeof buf, 10, value);
       if (!var) {
         /* make the variable (implicitly sets index 0), find it back */
-        tcl_var(tcl, tcl_data(name), tcl_value(p, strlen(p)));
+        tcl_var(tcl, tcl_data(name), tcl_value_string(p));
         var = tcl_findvar(tcl->env, tcl_data(name));
         assert(var);            /* if it didn't yet exist, it was just created */
         if (var->env) {         /* found local alias of a global/upvar; find the global/upvar */
@@ -1671,7 +1757,7 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
         }
       } else {
         assert(count < var->elements);
-        var->value[count] = tcl_value(p, strlen(p));
+        var->value[count] = tcl_value_string(p);
       }
       count++;
       bptr += step;
@@ -1723,8 +1809,8 @@ static int tcl_cmd_array(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_list(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_list(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *list = tcl_list_new();
   int n = tcl_list_length(args);
   for (int i = 1; i < n; i++) {
@@ -1733,8 +1819,8 @@ static int tcl_cmd_list(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, list);
 }
 
-static int tcl_cmd_concat(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_concat(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *list = tcl_list_new();
   int n = tcl_list_length(args);
   for (int i = 1; i < n; i++) {
@@ -1748,8 +1834,8 @@ static int tcl_cmd_concat(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, list);
 }
 
-static int tcl_cmd_lappend(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_lappend(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int n = tcl_list_length(args);
   /* check whether the value exists */
   struct tcl_value *name = tcl_list_item(args, 1);
@@ -1774,8 +1860,8 @@ static int tcl_cmd_lappend(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, tcl_dup(list));
 }
 
-static int tcl_cmd_linsert(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_linsert(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int nargs = tcl_list_length(args);
   struct tcl_value *list = tcl_list_item(args, 1);
   int list_len = tcl_list_length(list);
@@ -1802,8 +1888,8 @@ static int tcl_cmd_linsert(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, newlist);
 }
 
-static int tcl_cmd_lreplace(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_lreplace(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int nargs = tcl_list_length(args);
   struct tcl_value *list = tcl_list_item(args, 1);
   int list_len = tcl_list_length(list);
@@ -1830,16 +1916,16 @@ static int tcl_cmd_lreplace(struct tcl *tcl, struct tcl_value *args, void *arg) 
   return tcl_result(tcl, FNORMAL, newlist);
 }
 
-static int tcl_cmd_llength(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_llength(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *list = tcl_list_item(args, 1);
   int n = tcl_list_length(list);
   tcl_free(list);
   return tcl_numeric_result(tcl, FNORMAL, n);
 }
 
-static int tcl_cmd_lindex(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_lindex(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *list = tcl_list_item(args, 1);
   struct tcl_value *v_index = tcl_list_item(args, 2);
   int index = tcl_number(v_index);
@@ -1855,15 +1941,15 @@ static int tcl_cmd_lindex(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_lsearch(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_lsearch(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  bool exact_match = tcl_checkoption(user, "-exact");
   struct tcl_value *list = tcl_list_item(args, 1);
   struct tcl_value *pattern = tcl_list_item(args, 2);
   int list_len = tcl_list_length(list);
   int result = -1;
   for (int i = 0; i < list_len && result < 0; i++) {
     struct tcl_value *item = tcl_list_item(list, i);
-    if (tcl_fnmatch(tcl_data(pattern), tcl_data(item)))
+    if (tcl_match(exact_match, tcl_data(pattern), tcl_data(item)))
       result = i;
     tcl_free(item);
   }
@@ -1872,8 +1958,72 @@ static int tcl_cmd_lsearch(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_numeric_result(tcl, FNORMAL, result);
 }
 
-static int tcl_cmd_lrange(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_lsort(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  /* split the list into separate items */
+  struct tcl_value *list = tcl_list_item(args, 1);
+  int list_len = tcl_list_length(list);
+  struct tcl_value **items = malloc(list_len * sizeof(struct tcl_value*));
+  bool ok = true;
+  if (items) {
+    for (int i = 0; i < list_len; i++) {
+      items[i] = tcl_list_item(list, i);
+      if (!items[i]) {
+        ok = false;
+      }
+    }
+  } else {
+    ok = false;
+  }
+  tcl_free(list); /* the original list is no longer needed */
+  if (!ok) {
+    /* on failure, clean up and return an error code */
+    if (items) {
+      for (int i = 0; i < list_len; i++) {
+        if (items[i]) {
+          tcl_free(items[i]);
+        }
+      }
+    }
+    return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+  }
+  /* sort the array
+     insertion sort, source: Programming Pearls, Jon Bentley, chapter 12 */
+  if (tcl_checkoption(user, "-integer")) {
+    for (int i = 1; i < list_len; i++) {
+      struct tcl_value *key = items[i];
+      tcl_int key_int = tcl_number(key);
+      int j;
+      for (j = i; j > 0 && tcl_number(items[j-1]) > key_int; j--) {
+        items[j] = items[j - 1];
+      }
+      items[j] = key;
+    }
+  } else {
+    for (int i = 1; i < list_len; i++) {
+      struct tcl_value *key = items[i];
+      int j;
+      for (j = i; j > 0 && strcmp(tcl_data(items[j-1]), tcl_data(key)) > 0; j--) {
+        items[j] = items[j - 1];
+      }
+      items[j] = key;
+    }
+  }
+  /* make a new list and copy the sorted array */
+  list = tcl_list_new();
+  if (tcl_checkoption(user, "-decreasing")) {
+    for (int i = list_len - 1; i >= 0; i--) {
+      tcl_list_append(list, items[i]);
+    }
+  } else {
+    for (int i = 0; i < list_len; i++) {
+      tcl_list_append(list, items[i]);
+    }
+  }
+  return tcl_result(tcl, FNORMAL, list);
+}
+
+static int tcl_cmd_lrange(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *list = tcl_list_item(args, 1);
   int list_len = tcl_list_length(list);
   struct tcl_value *v_first = tcl_list_item(args, 2);
@@ -1890,8 +2040,8 @@ static int tcl_cmd_lrange(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, rangelist);
 }
 
-static int tcl_cmd_split(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_split(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *v_string = tcl_list_item(args, 1);
   const char *string = tcl_data(v_string);
   size_t string_len = tcl_length(v_string);
@@ -1917,8 +2067,8 @@ static int tcl_cmd_split(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, list);
 }
 
-static int tcl_cmd_join(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_join(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *list = tcl_list_item(args, 1);
   int list_len = tcl_list_length(list);
   struct tcl_value *sep = (tcl_list_length(args) >= 3) ? tcl_list_item(args, 2) : tcl_value(" ", 1);
@@ -1983,8 +2133,8 @@ static bool binary_fmt(const char **source, unsigned *width, unsigned *count, bo
   return true;
 }
 
-static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int r = FERROR;
   int nargs = tcl_list_length(args);
   int reqargs = 4, fmtidx = 2;
@@ -2113,12 +2263,12 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
         char field[30];
         const char *fptr = tcl_int2string(field, sizeof field, 10, val);
         if (count == 1) {
-          value = tcl_value(fptr, strlen(fptr));
+          value = tcl_value_string(fptr);
         } else {
           if (c == 0) {
             value = tcl_list_new();
           }
-          tcl_list_append(value, tcl_value(fptr, strlen(fptr)));
+          tcl_list_append(value, tcl_value_string(fptr));
         }
       }
       if (value) {
@@ -2140,14 +2290,14 @@ static int tcl_cmd_binary(struct tcl *tcl, struct tcl_value *args, void *arg) {
 #if !defined TCL_DISABLE_CLOCK
 #include <time.h>
 
-static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_clock(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int r = FERROR;
   struct tcl_value *subcmd = tcl_list_item(args, 1);
   if (SUBCMD(subcmd, "seconds")) {
     char buffer[20];
     sprintf(buffer, "%ld", (long)time(NULL));
-    r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
+    r = tcl_result(tcl, FNORMAL, tcl_value_string(buffer));
   } else if (SUBCMD(subcmd, "format")) {
     int argcount = tcl_list_length(args);
     if (argcount < 3) {
@@ -2161,7 +2311,7 @@ static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
       const char *format = v_format ? tcl_data(v_format) : "%Y-%m-%d %H:%M:%S";
       char buffer[50];
       strftime(buffer, sizeof buffer, format, timeinfo);
-      r = tcl_result(tcl, FNORMAL, tcl_value(buffer, strlen(buffer)));
+      r = tcl_result(tcl, FNORMAL, tcl_value_string(buffer));
       if (v_format) {
         tcl_free(v_format);
       }
@@ -2174,35 +2324,9 @@ static int tcl_cmd_clock(struct tcl *tcl, struct tcl_value *args, void *arg) {
 }
 #endif
 
-#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
-static int tcl_cmd_puts(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
-  struct tcl_value *fd = NULL;
-  struct tcl_value *text = NULL;
-  int r = FNORMAL;
-  if (tcl_list_length(args) == 3) {
-    fd = tcl_list_item(args, 1);
-    text = tcl_list_item(args, 2);
-    if (fileno((FILE*)tcl_number(fd)) < 0) {
-      r = tcl_error_result(tcl, TCLERR_FILEIO, NULL);
-    } else {
-      fputs(tcl_data(text), (FILE*)tcl_number(fd));
-    }
-  } else {
-    text = tcl_list_item(args, 1);
-    puts(tcl_data(text));
-  }
-  tcl_free(text);
-  if (fd) {
-    tcl_free(fd);
-  }
-  return (r == FNORMAL) ? tcl_empty_result(tcl) : r;
-}
-#endif
-
 #if !defined TCL_DISABLE_SOURCE
-static int tcl_cmd_source(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_source(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *path = tcl_list_item(args, 1);
 # if defined _WIN32 || defined _WIN64
     char buffer[_MAX_PATH];
@@ -2243,17 +2367,7 @@ static int tcl_cmd_source(struct tcl *tcl, struct tcl_value *args, void *arg) {
 }
 #endif
 
-#if !defined TCL_DISABLE_FILEIO
-# if defined _WIN32 || defined _WIN64
-#   include <io.h>
-# else
-#   define _S_IFDIR       S_IFDIR
-#   define _S_IFREG       S_IFREG
-#   include <unistd.h>
-#   include <fcntl.h>
-# endif
-# include <sys/stat.h>
-
+#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
 static FILE *tcl_stdhandle(const struct tcl_value *arg) {
   assert(arg);
   FILE *result = NULL;
@@ -2266,9 +2380,21 @@ static FILE *tcl_stdhandle(const struct tcl_value *arg) {
   }
   return result;
 }
+#endif
 
-static int tcl_cmd_open(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+#if !defined TCL_DISABLE_FILEIO
+# if defined _WIN32 || defined _WIN64
+#   include <io.h>
+# else
+#   define _S_IFDIR       S_IFDIR
+#   define _S_IFREG       S_IFREG
+#   include <unistd.h>
+#   include <fcntl.h>
+# endif
+# include <sys/stat.h>
+
+static int tcl_cmd_open(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *path = tcl_list_item(args, 1);
   if (tcl_stdhandle(path)) {
     /* make it an error to open a standard handle */
@@ -2302,16 +2428,16 @@ static int tcl_cmd_open(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_close(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_close(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *fd = tcl_list_item(args, 1);
   int r = tcl_stdhandle(fd) ? EOF : fclose((FILE*)tcl_number(fd)); /* make it an error to close a standard handle */
   tcl_free(fd);
   return (r == 0) ? tcl_empty_result(tcl) : tcl_error_result(tcl, TCLERR_FILEIO, "close");
 }
 
-static int tcl_cmd_flush(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_flush(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *fd = tcl_list_item(args, 1);
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
@@ -2319,8 +2445,8 @@ static int tcl_cmd_flush(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return (r == 0) ? tcl_empty_result(tcl) : tcl_error_result(tcl, TCLERR_FILEIO, "flush");
 }
 
-static int tcl_cmd_seek(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_seek(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *fd = tcl_list_item(args, 1);
   struct tcl_value *offset = tcl_list_item(args, 2);
   int org = SEEK_SET;
@@ -2340,8 +2466,8 @@ static int tcl_cmd_seek(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_empty_result(tcl);
 }
 
-static int tcl_cmd_tell(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_tell(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *fd = tcl_list_item(args, 1);
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
@@ -2349,8 +2475,8 @@ static int tcl_cmd_tell(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_numeric_result(tcl, FNORMAL, r);
 }
 
-static int tcl_cmd_eof(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_eof(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *fd = tcl_list_item(args, 1);
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
@@ -2358,8 +2484,7 @@ static int tcl_cmd_eof(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_numeric_result(tcl, FNORMAL, r);
 }
 
-static int tcl_cmd_read(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_read(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   struct tcl_value *fd = tcl_list_item(args, 1);
   long bytecount = LONG_MAX;
   if (tcl_list_length(args) == 3) {
@@ -2389,13 +2514,16 @@ static int tcl_cmd_read(struct tcl *tcl, struct tcl_value *args, void *arg) {
   }
   size_t count = fread(buffer, 1, bytecount, fp);
   assert(count <= (unsigned)bytecount); /* can be smaller when \r\n is translated to \n */
+  if (tcl_checkoption(user, "-nonewline") && count > 0 && buffer[count - 1] == '\n') {
+    count--;
+  }
   struct tcl_value *result = tcl_value(buffer, count);
   _free(buffer);
   return tcl_result(tcl, FNORMAL, result);
 }
 
-static int tcl_cmd_gets(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_gets(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *fd = tcl_list_item(args, 1);
   FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
   tcl_free(fd);
@@ -2409,9 +2537,9 @@ static int tcl_cmd_gets(struct tcl *tcl, struct tcl_value *args, void *arg) {
   }
   char *newline = strchr(buffer, '\n');
   if (newline) {
-    *newline = '\0';  /* remove trailing newline (because puts adds it) */
+    *newline = '\0';  /* remove trailing newline */
   }
-  struct tcl_value *result = tcl_value(buffer, strlen(buffer));
+  struct tcl_value *result = tcl_value_string(buffer);
   if (tcl_list_length(args) == 3) {
     struct tcl_value *varname = tcl_list_item(args, 2);
     tcl_var(tcl, tcl_data(varname), tcl_dup(result));
@@ -2420,8 +2548,8 @@ static int tcl_cmd_gets(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_result(tcl, FNORMAL, result);
 }
 
-static int tcl_cmd_file(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_file(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int r = FERROR;
   struct tcl_value *subcmd = tcl_list_item(args, 1);
   struct tcl_value *path = tcl_list_item(args, 2);
@@ -2454,7 +2582,7 @@ static int tcl_cmd_file(struct tcl *tcl, struct tcl_value *args, void *arg) {
   } else if (SUBCMD(subcmd, "extension")) {
     const char *p = strrchr(pname, '.');
     if (p && strchr(p, DIRSEP) == NULL) {
-      r = tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p)));
+      r = tcl_result(tcl, FNORMAL, tcl_value_string(p));
     } else {
       r = tcl_empty_result(tcl);
     }
@@ -2471,7 +2599,7 @@ static int tcl_cmd_file(struct tcl *tcl, struct tcl_value *args, void *arg) {
     if (p && strchr(p, DIRSEP) == NULL) {
       r = tcl_result(tcl, FNORMAL, tcl_value(pname, p - pname));
     } else {
-      r = tcl_result(tcl, FNORMAL, tcl_value(pname, strlen(pname)));
+      r = tcl_result(tcl, FNORMAL, tcl_value_string(pname));
     }
   } else if (SUBCMD(subcmd, "size")) {
     struct stat st;
@@ -2480,7 +2608,7 @@ static int tcl_cmd_file(struct tcl *tcl, struct tcl_value *args, void *arg) {
   } else if (SUBCMD(subcmd, "tail")) {
     const char *p = strrchr(pname, DIRSEP);
     p = p ? p + 1 : pname;
-    r = tcl_result(tcl, FNORMAL, tcl_value(p, strlen(p)));
+    r = tcl_result(tcl, FNORMAL, tcl_value_string(p));
   } else {
     r = tcl_error_result(tcl, TCLERR_SUBCMD, tcl_data(subcmd));
   }
@@ -2491,10 +2619,44 @@ static int tcl_cmd_file(struct tcl *tcl, struct tcl_value *args, void *arg) {
 }
 #endif /* TCL_DISABLE_FILEIO */
 
-static int tcl_user_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  struct tcl_value *code = (struct tcl_value *)arg;
-  struct tcl_value *paramlist = tcl_list_item(code, 2);
-  struct tcl_value *body = tcl_list_item(code, 3);
+#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
+static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  bool no_eol = tcl_checkoption(user, "-nonewline");
+  struct tcl_value *fd = NULL;
+  struct tcl_value *text = NULL;
+  int r = FNORMAL;
+  if (tcl_list_length(args) == 3) {
+    fd = tcl_list_item(args, 1);
+    text = tcl_list_item(args, 2);
+    FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
+    if (fileno(fp) < 0) {
+      r = tcl_error_result(tcl, TCLERR_FILEIO, NULL);
+    } else {
+      fprintf(fp, "%s", tcl_data(text));
+      if (!no_eol) {
+        fprintf(fp, "\n");
+      }
+    }
+  } else {
+    text = tcl_list_item(args, 1);
+    printf("%s", tcl_data(text));
+    if (!no_eol) {
+      printf("\n");
+    }
+  }
+  tcl_free(text);
+  if (fd) {
+    tcl_free(fd);
+  }
+  return (r == FNORMAL) ? tcl_empty_result(tcl) : r;
+}
+#endif
+
+static int tcl_user_proc(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  /* "user" argument is the entire "proc" definition, including the "proc"
+     command, the procedure name, the argument list and the body */
+  struct tcl_value *paramlist = tcl_list_item(user, 2);
+  struct tcl_value *body = tcl_list_item(user, 3);
   tcl->env = tcl_env_alloc(tcl->env);
   /* copy arguments to parameters (local variables) */
   unsigned paramlist_len = tcl_list_length(paramlist);
@@ -2543,10 +2705,10 @@ static int tcl_user_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
        proc declaration */
     const char *body_ptr;
     size_t body_sz;
-    tcl_list_item_ptr(code, 3, &body_ptr, &body_sz);
-    error_offs += body_ptr - tcl_data(code);
+    tcl_list_item_ptr(user, 3, &body_ptr, &body_sz);
+    error_offs += body_ptr - tcl_data(user);
     /* need to find the proc again */
-    struct tcl_value *cmdname = tcl_list_item(code, 1);
+    struct tcl_value *cmdname = tcl_list_item(user, 1);
     struct tcl_cmd *cmd = tcl_lookup_cmd(tcl, cmdname);
     tcl_free(cmdname);
     assert(cmd);  /* it just ran, so it must be found */
@@ -2560,13 +2722,13 @@ static int tcl_user_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return (r == FRETURN) ? FNORMAL : r;
 }
 
-static int tcl_cmd_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_proc(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int r = FNORMAL;
   struct tcl_value *name = tcl_list_item(args, 1);
   struct tcl_value *paramlist = tcl_list_item(args, 2);
-  unsigned paramcount = 1;    /* include proc name in parameter count */
-  unsigned defaultcount = 0;  /* check whether parameters have default values */
+  short paramcount = 0;
+  short defaultcount = 0;     /* check whether parameters have default values */
   bool is_varargs = false;    /* check for variable number of arguments */
   unsigned paramlist_len = tcl_list_length(paramlist);
   for (unsigned i = 0; i < paramlist_len; i++) {
@@ -2590,8 +2752,8 @@ static int tcl_cmd_proc(struct tcl *tcl, struct tcl_value *args, void *arg) {
     }
     tcl_free(param);
   }
-  unsigned max_params = is_varargs ? 0 : paramcount + defaultcount;
-  struct tcl_cmd *cmd = tcl_register(tcl, tcl_data(name), tcl_user_proc, paramcount, max_params, tcl_dup(args));
+  short max_params = is_varargs ? -1 : paramcount + defaultcount;
+  struct tcl_cmd *cmd = tcl_register(tcl, tcl_data(name), tcl_user_proc, 0, paramcount, max_params, tcl_dup(args));
   tcl_free(name);
   tcl_free(paramlist);
   struct tcl_env *global_env = tcl_env_scope(tcl, 0);
@@ -2639,8 +2801,8 @@ int tcl_eval_condition(struct tcl *tcl, struct tcl_value *cond) {
   return r;
 }
 
-static int tcl_cmd_if(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_if(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int i = 1;
   int n = tcl_list_length(args);
   int r = tcl_empty_result(tcl);
@@ -2699,14 +2861,14 @@ static int tcl_cmd_if(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_switch(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_switch(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  bool exact_match = tcl_checkoption(user, "-exact");
   int nargs = tcl_list_length(args);
   int r = tcl_empty_result(tcl);
   struct tcl_value *crit = tcl_list_item(args, 1);
   /* there are two forms of switch: all pairs in a list, or all pairs simply
      appended onto the tail of the command */
-  struct tcl_value *list;
+  const struct tcl_value *list;
   int list_idx, list_len;
   if (nargs == 3) {
     list = tcl_list_item(args, 2);
@@ -2721,7 +2883,7 @@ static int tcl_cmd_switch(struct tcl *tcl, struct tcl_value *args, void *arg) {
   while (list_idx < list_len) {
     struct tcl_value *pattern = tcl_list_item(list, list_idx);
     bool match = (strcmp(tcl_data(pattern), "default") == 0 ||
-                  tcl_fnmatch(tcl_data(pattern), tcl_data(crit)));
+                  tcl_match(exact_match, tcl_data(pattern), tcl_data(crit)));
     tcl_free(pattern);
     if (match) {
       break;
@@ -2741,7 +2903,7 @@ static int tcl_cmd_switch(struct tcl *tcl, struct tcl_value *args, void *arg) {
   /* clean up values that are no longer needed */
   tcl_free(crit);
   if (nargs == 3) {
-    tcl_free(list);
+    tcl_free((struct tcl_value*)list);
   }
   /* execute the body */
   if (body) {
@@ -2751,8 +2913,8 @@ static int tcl_cmd_switch(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_while(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_while(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   assert(tcl_list_length(args) == 3);
   struct tcl_value *cond = tcl_make_condition_list(tcl_list_item(args, 1));
   struct tcl_value *body = tcl_list_item(args, 2);
@@ -2780,8 +2942,8 @@ static int tcl_cmd_while(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_for(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_for(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   assert(tcl_list_length(args) == 5);
   struct tcl_value *setup = tcl_list_item(args, 1);
   int r = tcl_eval(tcl, tcl_data(setup), tcl_length(setup) + 1);
@@ -2820,8 +2982,8 @@ static int tcl_cmd_for(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_foreach(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_foreach(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   assert(tcl_list_length(args) == 4);
   struct tcl_value *name = tcl_list_item(args, 1);
   struct tcl_value *list = tcl_list_item(args, 2);
@@ -2845,8 +3007,8 @@ static int tcl_cmd_foreach(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_flow(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_flow(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   int r = FERROR;
   struct tcl_value *flowval = tcl_list_item(args, 0);
   const char *flow = tcl_data(flowval);
@@ -2865,8 +3027,8 @@ static int tcl_cmd_flow(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return r;
 }
 
-static int tcl_cmd_catch(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_catch(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *body = tcl_list_item(args, 1);
   int r = tcl_eval(tcl, tcl_data(body), tcl_length(body) + 1);
   if (r == FEXIT) {
@@ -2882,8 +3044,8 @@ static int tcl_cmd_catch(struct tcl *tcl, struct tcl_value *args, void *arg) {
   return tcl_numeric_result(tcl, FNORMAL, r);
 }
 
-static int tcl_cmd_error(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_error(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   struct tcl_value *msg = tcl_list_item(args, 1);
   tcl_error_result(tcl, TCLERR_USER, tcl_data(msg));
   tcl_free(msg);
@@ -3011,7 +3173,7 @@ static int expr_lex(struct expr *expr) {
   } else if (tcl_isdigit(*expr->pos)) {
     char *ptr;
     expr->token = TOK_NUMBER;
-    expr->lnumber = strtol(expr->pos, &ptr, 0);
+    expr->lnumber = strtoll(expr->pos, &ptr, 0);
     expr->pos = ptr;
     if (tcl_isalpha(*expr->pos) || *expr->pos == '.' || *expr->pos == ',')
       expr_error(expr, eINVALID_NUM);
@@ -3047,7 +3209,7 @@ static int expr_lex(struct expr *expr) {
     expr_skip(expr, 0);          /* erase white space */
     const struct tcl_value *varvalue = tcl_var(expr->tcl, name, NULL);
     expr->token = TOK_VARIABLE;
-    expr->lnumber = varvalue ? strtol(tcl_data(varvalue), NULL, 10) : 0;
+    expr->lnumber = varvalue ? tcl_number(varvalue) : 0;
   } else {
     expr_error(expr, eINVALID_CHAR);
     expr->token = TOK_END_EXPR;
@@ -3305,8 +3467,8 @@ static char *tcl_int2string(char *buffer, size_t bufsz, int radix, tcl_int value
   return p + 1;
 }
 
-static int tcl_cmd_expr(struct tcl *tcl, struct tcl_value *args, void *arg) {
-  (void)arg;
+static int tcl_cmd_expr(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
   /* re-construct the expression (it may have been tokenized by the Tcl Lexer) */
   struct tcl_value *expression;
   int count = tcl_list_length(args);
@@ -3376,62 +3538,63 @@ void tcl_init(struct tcl *tcl) {
   tcl->result = tcl_value("", 0);
 
   /* built-in commands */
-  tcl_register(tcl, "append", tcl_cmd_append, 3, 0, NULL);
-  tcl_register(tcl, "array", tcl_cmd_array, 3, 5, NULL);
-  tcl_register(tcl, "break", tcl_cmd_flow, 1, 1, NULL);
-  tcl_register(tcl, "catch", tcl_cmd_catch, 2, 3, NULL);
-  tcl_register(tcl, "concat", tcl_cmd_concat, 1, 0, NULL);
-  tcl_register(tcl, "continue", tcl_cmd_flow, 1, 1, NULL);
-  tcl_register(tcl, "error", tcl_cmd_error, 2, 2, NULL);
-  tcl_register(tcl, "exit", tcl_cmd_flow, 1, 2, NULL);
-  tcl_register(tcl, "expr", tcl_cmd_expr, 1, 0, NULL);
-  tcl_register(tcl, "for", tcl_cmd_for, 5, 5, NULL);
-  tcl_register(tcl, "foreach", tcl_cmd_foreach, 4, 4, NULL);
-  tcl_register(tcl, "format", tcl_cmd_format, 2, 0, NULL);
-  tcl_register(tcl, "global", tcl_cmd_global, 2, 0, NULL);
-  tcl_register(tcl, "if", tcl_cmd_if, 3, 0, NULL);
-  tcl_register(tcl, "incr", tcl_cmd_incr, 2, 3, NULL);
-  tcl_register(tcl, "info", tcl_cmd_info, 2, 3, NULL);
-  tcl_register(tcl, "join", tcl_cmd_join, 2, 3, NULL);
-  tcl_register(tcl, "lappend", tcl_cmd_lappend, 3, 0, NULL);
-  tcl_register(tcl, "list", tcl_cmd_list, 1, 0, NULL);
-  tcl_register(tcl, "lindex", tcl_cmd_lindex, 3, 3, NULL);
-  tcl_register(tcl, "linsert", tcl_cmd_linsert, 4, 0, NULL);
-  tcl_register(tcl, "llength", tcl_cmd_llength, 2, 2, NULL);
-  tcl_register(tcl, "lrange", tcl_cmd_lrange, 4, 4, NULL);
-  tcl_register(tcl, "lreplace", tcl_cmd_lreplace, 4, 0, NULL);
-  tcl_register(tcl, "lsearch", tcl_cmd_lsearch, 3, 3, NULL);
-  tcl_register(tcl, "proc", tcl_cmd_proc, 4, 4, NULL);
-  tcl_register(tcl, "return", tcl_cmd_flow, 1, 2, NULL);
-  tcl_register(tcl, "scan", tcl_cmd_scan, 3, 0, NULL);
-  tcl_register(tcl, "set", tcl_cmd_set, 2, 3, NULL);
-  tcl_register(tcl, "source", tcl_cmd_source, 2, 2, NULL);
-  tcl_register(tcl, "split", tcl_cmd_split, 2, 3, NULL);
-  tcl_register(tcl, "string", tcl_cmd_string, 3, 6, NULL);
-  tcl_register(tcl, "subst", tcl_cmd_subst, 2, 2, NULL);
-  tcl_register(tcl, "switch", tcl_cmd_switch, 3, 0, NULL);
-  tcl_register(tcl, "unset", tcl_cmd_unset, 2, 0, NULL);
-  tcl_register(tcl, "upvar", tcl_cmd_upvar, 2, 0, NULL);
-  tcl_register(tcl, "while", tcl_cmd_while, 3, 3, NULL);
+  tcl_register(tcl, "append", tcl_cmd_append, 0, 2, -1, NULL);
+  tcl_register(tcl, "array", tcl_cmd_array, 1, 1, 3, NULL);
+  tcl_register(tcl, "break", tcl_cmd_flow, 0, 0, 0, NULL);
+  tcl_register(tcl, "catch", tcl_cmd_catch, 0, 1, 2, NULL);
+  tcl_register(tcl, "concat", tcl_cmd_concat, 0, 1, -1, NULL);
+  tcl_register(tcl, "continue", tcl_cmd_flow, 0, 0, 0, NULL);
+  tcl_register(tcl, "error", tcl_cmd_error, 0, 1, 1, NULL);
+  tcl_register(tcl, "exit", tcl_cmd_flow, 0, 0, 1, NULL);
+  tcl_register(tcl, "expr", tcl_cmd_expr, 0, 1, -1, NULL);
+  tcl_register(tcl, "for", tcl_cmd_for, 0, 4, 4, NULL);
+  tcl_register(tcl, "foreach", tcl_cmd_foreach, 0, 3, 3, NULL);
+  tcl_register(tcl, "format", tcl_cmd_format, 0, 1, -1, NULL);
+  tcl_register(tcl, "global", tcl_cmd_global, 0, 1, -1, NULL);
+  tcl_register(tcl, "if", tcl_cmd_if, 0, 2, -1, NULL);
+  tcl_register(tcl, "incr", tcl_cmd_incr, 0, 1, 2, NULL);
+  tcl_register(tcl, "info", tcl_cmd_info, 1, 0, 1, NULL);
+  tcl_register(tcl, "join", tcl_cmd_join, 0, 1, 2, NULL);
+  tcl_register(tcl, "lappend", tcl_cmd_lappend, 0, 2, -1, NULL);
+  tcl_register(tcl, "list", tcl_cmd_list, 0, 0, -1, NULL);
+  tcl_register(tcl, "lindex", tcl_cmd_lindex, 0, 2, 2, NULL);
+  tcl_register(tcl, "linsert", tcl_cmd_linsert, 0, 3, -1, NULL);
+  tcl_register(tcl, "llength", tcl_cmd_llength, 0, 1, 1, NULL);
+  tcl_register(tcl, "lrange", tcl_cmd_lrange, 0, 3, 3, NULL);
+  tcl_register(tcl, "lreplace", tcl_cmd_lreplace, 0, 3, -1, NULL);
+  tcl_register(tcl, "lsearch", tcl_cmd_lsearch, 0, 2, 2, tcl_value_string("-exact -glob"));
+  tcl_register(tcl, "lsort", tcl_cmd_lsort, 0, 1, 1, tcl_value_string("-ascii -integer -increasing -decreasing"));
+  tcl_register(tcl, "proc", tcl_cmd_proc, 0, 3, 3, NULL);
+  tcl_register(tcl, "return", tcl_cmd_flow, 0, 0, 1, NULL);
+  tcl_register(tcl, "scan", tcl_cmd_scan, 0, 2, -1, NULL);
+  tcl_register(tcl, "set", tcl_cmd_set, 0, 1, 2, NULL);
+  tcl_register(tcl, "source", tcl_cmd_source, 0, 1, 1, NULL);
+  tcl_register(tcl, "split", tcl_cmd_split, 0, 1, 2, NULL);
+  tcl_register(tcl, "string", tcl_cmd_string, 1, 1, 4, tcl_value_string("-nocase"));
+  tcl_register(tcl, "subst", tcl_cmd_subst, 0, 1, 1, NULL);
+  tcl_register(tcl, "switch", tcl_cmd_switch, 0, 2, -1, tcl_value_string("-exact -glob"));
+  tcl_register(tcl, "unset", tcl_cmd_unset, 0, 1, -1, NULL);
+  tcl_register(tcl, "upvar", tcl_cmd_upvar, 0, 1, -1, NULL);
+  tcl_register(tcl, "while", tcl_cmd_while, 0, 2, 2, NULL);
 # if !defined TCL_DISABLE_CLOCK
-    tcl_register(tcl, "clock", tcl_cmd_clock, 2, 4, NULL);
+    tcl_register(tcl, "clock", tcl_cmd_clock, 1, 0, 2, NULL);
 # endif
 # if !defined TCL_DISABLE_FILEIO
-    tcl_register(tcl, "close", tcl_cmd_close, 2, 2, NULL);
-    tcl_register(tcl, "eof", tcl_cmd_eof, 2, 2, NULL);
-    tcl_register(tcl, "file", tcl_cmd_file, 3, 3, NULL);
-    tcl_register(tcl, "file", tcl_cmd_flush, 2, 2, NULL);
-    tcl_register(tcl, "gets", tcl_cmd_gets, 2, 3, NULL);
-    tcl_register(tcl, "open", tcl_cmd_open, 2, 3, NULL);
-    tcl_register(tcl, "puts", tcl_cmd_puts, 2, 3, NULL);
-    tcl_register(tcl, "read", tcl_cmd_read, 2, 3, NULL);
-    tcl_register(tcl, "seek", tcl_cmd_seek, 3, 4, NULL);
-    tcl_register(tcl, "tell", tcl_cmd_tell, 2, 2, NULL);
+    tcl_register(tcl, "close", tcl_cmd_close, 0, 1, 1, NULL);
+    tcl_register(tcl, "eof", tcl_cmd_eof, 0, 1, 1, NULL);
+    tcl_register(tcl, "file", tcl_cmd_file, 1, 1, 1, NULL);
+    tcl_register(tcl, "file", tcl_cmd_flush, 0, 1, 1, NULL);
+    tcl_register(tcl, "gets", tcl_cmd_gets, 0, 1, 2, NULL);
+    tcl_register(tcl, "open", tcl_cmd_open, 0, 1, 2, NULL);
+    tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value_string("-nonewline"));
+    tcl_register(tcl, "read", tcl_cmd_read, 0, 1, 2, tcl_value_string("-nonewline"));
+    tcl_register(tcl, "seek", tcl_cmd_seek, 0, 2, 3, NULL);
+    tcl_register(tcl, "tell", tcl_cmd_tell, 0, 1, 1, NULL);
 # elif !defined TCL_DISABLE_PUTS
-    tcl_register(tcl, "puts", tcl_cmd_puts, 2, 2, NULL);
+    tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value_string("-nonewline"));
 # endif
 # if !defined TCL_DISABLE_BINARY
-    tcl_register(tcl, "binary", tcl_cmd_binary, 4, 0, NULL);
+    tcl_register(tcl, "binary", tcl_cmd_binary, 1, 2, -1, NULL);
 # endif
 }
 
@@ -3444,8 +3607,8 @@ void tcl_destroy(struct tcl *tcl) {
     struct tcl_cmd *cmd = tcl->cmds;
     tcl->cmds = tcl->cmds->next;
     tcl_free(cmd->name);
-    if (cmd->fn == tcl_user_proc) {
-      tcl_free((struct tcl_value*)cmd->user);
+    if (cmd->user) {
+      tcl_free(cmd->user);
     }
     _free(cmd);
   }

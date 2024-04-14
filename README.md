@@ -41,9 +41,9 @@ if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
     struct tcl_value *retval = tcl_return(&tcl);
     printf("Return: %.*s\n", tcl_length(retval), tcl_data(retval));
 } else {
-    int code, line;
-    const char *msg = tcl_errorpos(&tcl, &code, &line, NULL, 0);
-    printf("Error [%d] %s on or after line %d\n", code, msg, line);
+    int line;
+    const char *msg = tcl_errorinfo(&tcl, &line);
+    printf("Error on or after line %d: %s\n", line, msg);
 }
 tcl_destroy(&tcl);
 ```
@@ -149,6 +149,8 @@ builtin command), but that same variable can still be used in string operations.
 
 ## Builtin commands
 
+The table below is a brief summary of the built-in commands in ParTcl. See the "Tcl Primer" (or other documentation on Tcl) for details on these commands.
+
 | name       | summary |
 | ---------- | ------- |
 | `append`   | Append contents to a variable (concatenate strings). |
@@ -183,6 +185,7 @@ builtin command), but that same variable can still be used in string operations.
 | `lrange`   | Return a subset of a source list as a new list. |
 | `lreplace` | Delete a range of elements in a list and inserts a new set of elements at that position. |
 | `lsearch`  | Search a list for the first element that matches a pattern. |
+| `lsort`    | Sort the elements in a list. |
 | `open`     | Open a file. This command can be disabled using `#define TCL_DISABLE_FILEIO`, e.g for embedded systems without file system. |
 | `proc`     | Create a new command appending it to the list of current interpreter commands. That's how user-defined commands are built. |
 | `puts`     | Print argument to the stdout, followed by a newline. This command can be disabled using both `#define TCL_DISABLE_PUTS` (for "stdout") and `#define TCL_DISABLE_FILEIO` (for output to file). |
@@ -286,7 +289,7 @@ struct tcl_value *tcl_free(struct tcl_value *value);
 struct tcl_value *tcl_var(struct tcl *tcl, const char *name, struct tcl_value *value);
 struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
                              unsigned short minargs, unsigned short maxargs,
-                             void *user);
+                             struct tcl_value *user);
 void tcl_destroy(struct tcl *tcl);
 
 /* Internal functions also doing memory allocation */
