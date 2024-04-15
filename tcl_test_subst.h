@@ -5,7 +5,7 @@ static void check_eval(struct tcl *tcl, const char *s, char *expected) {
   int destroy = 0;
   struct tcl tmp;
   if (tcl == NULL) {
-    tcl_init(&tmp);
+    tcl_init(&tmp, NULL);
     tcl = &tmp;
     destroy = 1;
   } else {
@@ -39,7 +39,7 @@ static void test_subst() {
   //check_eval(NULL, "subst $foo", ""); // TR: this fails because using a variable before it is set, is now an error
 
   struct tcl tcl;
-  tcl_init(&tcl);
+  tcl_init(&tcl, NULL);
   tcl_var(&tcl, "foo", tcl_value("bar", 3));
   tcl_var(&tcl, "bar", tcl_value("baz", 3));
   tcl_var(&tcl, "baz", tcl_value("Hello", 5));

@@ -36,7 +36,7 @@ The API is documented in the `tcl.h` file.
 struct tcl tcl;
 const char *script = "set x 4; puts [expr 2 + $x * 10]";
 
-tcl_init(&tcl);
+tcl_init(&tcl, NULL);
 if (tcl_eval(&tcl, script, strlen(script)) != FERROR) {
     struct tcl_value *retval = tcl_return(&tcl);
     printf("Return: %.*s\n", tcl_length(retval), tcl_data(retval));

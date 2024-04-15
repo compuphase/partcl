@@ -23,7 +23,7 @@ static void test_flow() {
              "C");
 
   struct tcl tcl;
-  tcl_init(&tcl);
+  tcl_init(&tcl, NULL);
   check_eval(&tcl, "set x 0", "0");
   check_eval(&tcl, "while {$x < 5} {set x [expr $x + 1]}", "0");
   check_eval(&tcl, "set x 0", "0");

@@ -38,6 +38,7 @@ struct tcl {
   struct tcl_value *result;
   struct tcl_value *errinfo;
   int errcode;
+  const void *user;
 };
 
 
@@ -49,7 +50,7 @@ struct tcl {
  *
  *  \param tcl      The interpreter context.
  */
-void tcl_init(struct tcl *tcl);
+void tcl_init(struct tcl *tcl, const void *user);
 
 /** tcl_destroy() cleans up the interpreter context, frees all memory.
  *
@@ -139,13 +140,14 @@ tcl_int tcl_number(const struct tcl_value *value);
  *
  *  \param data     The contents to store in the value. A copy is made of this
  *                  buffer.
- *  \param len      The length of the data.
+ *  \param len      The length of the data. If this parameter is set to -1, the
+ *                  `data` buffer is assumed to be a zero-terminated string.
  *
  *  \return A pointer to the created value.
  *
  *  \note The value should be deleted with tcl_free().
  */
-struct tcl_value *tcl_value(const char *data, size_t len);
+struct tcl_value *tcl_value(const char *data, long len);
 
 /** tcl_free() deallocates a value or a list.
  *
@@ -193,6 +195,14 @@ struct tcl_value *tcl_list_item(const struct tcl_value *list, int index);
  *        that was appended, are deallocated (freed).
  */
 bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail);
+
+/** tcl_list_find() returns the index of the word in the list, or -1 if it is
+ *  not found.
+ *
+ *  \note This is a helper function that is typically used to look for switches
+ *        of a command.
+ */
+int tcl_list_find(const struct tcl_value *list, const char *word);
 
 
 /* =========================================================================
@@ -268,7 +278,7 @@ struct tcl_cmd *tcl_register(struct tcl *tcl, const char *name, tcl_cmd_fn_t fn,
 /** tcl_result() sets the result of a C function into the ParTcl environment.
  *
  *  \param tcl      The interpreter context.
- *  \param flow     Should be set to 0 if an error occurred, or 1 on success
+ *  \param flow     Should be set to 1 if an error occurred, or 0 on success
  *                  (other values for "flow" are used internally).
  *  \param result   The result (or "return value") of the C function. See notes
  *                  below.
