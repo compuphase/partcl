@@ -1,7 +1,7 @@
 #ifndef TCL_TEST_SUBST_H
 #define TCL_TEST_SUBST_H
 
-static void check_eval(struct tcl *tcl, const char *s, char *expected) {
+static void check_eval(struct tcl *tcl, const char *s, const char *expected) {
   int destroy = 0;
   struct tcl tmp;
   if (tcl == NULL) {

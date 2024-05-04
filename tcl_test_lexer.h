@@ -9,7 +9,7 @@ static void va_check_tokens(const char *s, size_t len, int count, va_list ap) {
   int j = 0;
   tcl_each(s, len, 1) {
     int type = va_arg(ap, int);
-    char *token = va_arg(ap, char *);
+    const char *token = va_arg(ap, char *);
     j++;
     if (p.token != type) {
       FAIL("Expected token #%d type %d, but found %d (%.*s)\n", j, type,

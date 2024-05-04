@@ -759,21 +759,20 @@ static int tcl_error_result(struct tcl *tcl, int code, const char *info) {
   if (tcl->errcode == 0) {
     tcl->errcode = code;
     size_t len = strlen(errmsg[code]) + 1;  /* +1 for '\0' */
-    if (info) {
+    if (info)
       len += strlen(info) + 2;  /* +2 for ": " */
-      char *msg = _malloc(len);
-      if (msg) {
-        strcpy(msg, errmsg[code]);
-        if (info) {
-          strcat(msg, ": ");
-          strcat(msg, info);
-        }
-        if (tcl->errinfo) {
-          tcl_free(tcl->errinfo);
-        }
-        tcl->errinfo = tcl_value(msg, len);
-        _free(msg);
+    char *msg = _malloc(len);
+    if (msg) {
+      strcpy(msg, errmsg[code]);
+      if (info) {
+        strcat(msg, ": ");
+        strcat(msg, info);
       }
+      if (tcl->errinfo) {
+        tcl_free(tcl->errinfo);
+      }
+      tcl->errinfo = tcl_value(msg, len);
+      _free(msg);
     }
     /* create a global variable that holds a copy of the error info */
     struct tcl_env *env_save = tcl->env;
@@ -873,7 +872,7 @@ static int tcl_subst(struct tcl *tcl, const char *string, size_t len) {
         tcl_append(name, tcl_value(")", 1));
       }
     }
-    struct tcl_value *v = tcl_var(tcl, tcl_data(name), NULL);
+    const struct tcl_value *v = tcl_var(tcl, tcl_data(name), NULL);
     tcl_free(name);
     return v ? tcl_result(tcl, FNORMAL, tcl_dup(v)) : tcl_error_result(tcl, TCLERR_VARUNKNOWN, NULL);
   }
@@ -1425,7 +1424,7 @@ static int tcl_cmd_incr(struct tcl *tcl, const struct tcl_value *args, const str
   }
   struct tcl_value *name = tcl_list_item(args, 1);
   assert(name);
-  struct tcl_value *v = tcl_var(tcl, tcl_data(name), NULL);
+  const struct tcl_value *v = tcl_var(tcl, tcl_data(name), NULL);
   const char *p = "";
   if (v) {
     char buf[64];
@@ -2828,16 +2827,16 @@ static int tcl_cmd_if(struct tcl *tcl, const struct tcl_value *args, const struc
       tcl_free(branch);
       break;              /* branch taken, do not take any other branch */
     }
-    branch = tcl_free(branch);
+    tcl_free(branch);
     /* "then" branch not taken, check how to continue, first check for keyword */
     if (i < n) {
       branch = tcl_list_item(args, i);
       if (strcmp(tcl_data(branch), "elseif") == 0) {
-        branch = tcl_free(branch);
+        tcl_free(branch);
         i++;              /* skip the keyword (then drop back into the loop,
                              parsing the next condition) */
       } else if (strcmp(tcl_data(branch), "else") == 0) {
-        branch = tcl_free(branch);
+        tcl_free(branch);
         i++;              /* skip the keyword */
         if (i < n) {
           branch = tcl_list_item(args, i++);
@@ -2850,15 +2849,14 @@ static int tcl_cmd_if(struct tcl *tcl, const struct tcl_value *args, const struc
       } else if (i + 1 < n) {
         /* no explicit keyword, but at least two blocks in the list:
            assume it is {cond} {branch} (implied elseif) */
-        branch = tcl_free(branch);
+        tcl_free(branch);
       } else {
         /* last block: must be (implied) else */
         i++;
         r = tcl_eval(tcl, tcl_data(branch), tcl_length(branch) + 1);
-        branch = tcl_free(branch);
+        tcl_free(branch);
       }
     }
-
   }
   return r;
 }

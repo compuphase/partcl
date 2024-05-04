@@ -9,13 +9,13 @@ significantly, and is now often used to create complete tools or utilities in.
 ParTcl reverts back to the roots of Tcl: ParTcl's goal is to be easily embeddable
 in applications, and function as an extension language for these applications.
 In pursuit of simplicitly and compactness of the implementation, ParTcl is closer
-to the original versions of Tcl (pre 7.0), in syntax and is semantics, than to
+to the original versions of Tcl (pre 7.0), in syntax and in semantics, than to
 the lastest release (8.6, at the time of writing).
 
-There is documentation in this repository in the form of a "Tcl Primer," a
-tutorial specific for ParTcl. For more details, or background information on
-Tcl, you can pick up a general book on Tcl. Old books are fine (because ParTcl
-draws back to the original Tcl). See, for example, "[Tcl and the Tk Toolkit](http://csis.pace.edu/~benjamin/software/book1.pdf)"
+There is documentation in this repository: `Tcl-Tutorial.pdf` is a tutorial specific
+for ParTcl. For more details, or background information on Tcl, you can pick up
+a general book on Tcl. Old books are fine (because ParTcl draws back to the original
+Tcl). See, for example, "[Tcl and the Tk Toolkit](http://csis.pace.edu/~benjamin/software/book1.pdf)"
 by John Ousterhout, and which is available for free.
 
 ## Features
