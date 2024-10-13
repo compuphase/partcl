@@ -164,6 +164,7 @@ The table below is a brief summary of the built-in commands in ParTcl. See the "
 | `continue` | Skip the remainder of the loop body, jumps back to the condition of the loop. |
 | `eof`      | Check whether End-Of-File has been reached. This command can be disabled using `#define TCL_DISABLE_FILEIO`, e.g. for embedded systems without file system. |
 | `error`    | throw an exception (which can be caught with `catch`). |
+| `exec`     | Run a program and capture output. This command can be disabled using `#define TCL_DISABLE_EXEC`. |
 | `exit`     | End the script with an optional return code. Note that this command aborts the script, but not the program that ParTcl is embedded in. |
 | `expr`     | Interpret the infix expression that follows. This is and integer-only expression parser, but supporting most of the Tcl operator set, with the same precedence levels as standard Tcl. Missing are: the conditional operator (`? :`), list operators `in` and `ni`, and functions. |
 | `file`     | An assortment of file information functions: `dirname`, `exists`, `extension`, `isdirectory`, `isfile`, `rootname`, `size` and `tail`. This command can be disabled using `#define TCL_DISABLE_FILEIO`, e.g. for embedded systems without file system. |

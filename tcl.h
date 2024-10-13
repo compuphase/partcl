@@ -242,18 +242,22 @@ typedef int (*tcl_cmd_fn_t)(struct tcl *tcl, const struct tcl_value *args, const
  *  \param tcl      The interpreter context.
  *  \param name     The name of the command.
  *  \param fn       The function pointer.
- *  \param subcmds  How many subcommands the command has; zero for none.
+ *  \param subcmds  How many subcommand levels the command has; zero for none.
  *  \param minargs  The minimum number of parameters of the command. This value
- *                  excludes the number of subcommands.
- *  \param maxargs  The maximum number of parameters of the command, which
- *                  includes the command name itself. Set this to -1 for a
- *                  variable argument list. This value does typically *not*
- *                  include switches, see the notes below.
+ *                  excludes the number of subcommand levels.
+ *  \param maxargs  The maximum number of parameters of the command (excluding
+ *                  the subcommand levels). Set this to -1 for a variable
+ *                  argument list. This value does typically *not* include
+ *                  switches, see the notes below.
  *  \param user     A user value or list. It is typically used to pass a list of
  *                  switches that a command supports. It may also be used for
  *                  other purposes, or it be set to NULL. See the notes.
  *
  *  \return A pointer to the command structure that was just added.
+ *
+ *  \note Subcommand levels are required parameters. The `subcmds` parameter
+ *        holds the number of words that must follow a command name. Commands
+ *        that take subcommands, typically use a single level.
  *
  *  \note If the `user` parameter in tcl_register() contains a list of switches,
  *        and if the call to the command has one or more switches, then these

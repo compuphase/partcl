@@ -35,8 +35,33 @@ SOFTWARE.
 
 #if defined WIN32 || defined _WIN32
 # if defined __MINGW32__ || defined __MINGW64__ || defined _MSC_VER
-    size_t strlcat(char *dst, const char *src, size_t size);
-    size_t strlcpy(char *dst, const char *src, size_t size);
+    /* source https://gist.github.com/Fonger/98cc95ac39fbe1a7e4d9
+       with minor modifications */
+
+    static size_t strlcat(char *dst, const char *src, size_t size) {
+      size_t dstlen = strlen(dst);
+      if (size <= dstlen + 1)
+        return (dstlen);        /* No room, return immediately... */
+      size -= dstlen + 1;
+      size_t srclen = strlen(src);
+      if (srclen > size)
+        srclen = size;
+      memcpy(dst + dstlen, src, srclen);
+      dst[dstlen + srclen] = '\0';
+      return (dstlen + srclen);
+    }
+
+    static size_t strlcpy(char *dst, const char *src, size_t size) {
+      if (size == 0)
+        return 0;
+      size -= 1;
+      size_t srclen = strlen(src);
+      if (srclen > size)
+        srclen = size;
+      memcpy(dst, src, srclen);
+      dst[srclen] = '\0';
+      return (srclen);
+    }
 # endif
 #else
 # if defined __linux__
@@ -47,6 +72,11 @@ SOFTWARE.
 
 #if defined FORTIFY
 # include "fortify.h"	/* malloc tracking & debugging library */
+#endif
+
+#if defined __GNUC__
+# pragma GCC diagnostic ignored "-Wpointer-to-int-cast"
+# pragma GCC diagnostic ignored "-Wint-to-pointer-cast"
 #endif
 
 #define MAX_VAR_LENGTH  256
@@ -194,7 +224,7 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
     if (quote) {
       return TPART;
     }
-    if (length < 2 || (!tcl_is_space(string[1]) && !tcl_is_end(string[1]))) {
+    if (length < 1 || (length > 1 && (!tcl_is_space(string[1]) && !tcl_is_end(string[1])))) {
       return TERROR;
     }
     *from = *to = string + 1;
@@ -1613,8 +1643,11 @@ static int tcl_cmd_string(struct tcl *tcl, const struct tcl_value *args, const s
         }
         tcl_free(arg3);
       }
-      if (last > (int)tcl_length(arg1)) {
-        last = tcl_length(arg1);
+      if (last >= (int)tcl_length(arg1)) {
+        last = tcl_length(arg1) - 1;
+      }
+      if (last < first) {
+        last = first;
       }
       r = tcl_result(tcl, FNORMAL, tcl_value(tcl_data(arg1) + first, last - first + 1));
     } else if (SUBCMD(subcmd, "replace")) {
@@ -1767,7 +1800,7 @@ static int tcl_cmd_array(struct tcl *tcl, const struct tcl_value *args, const st
     tcl_free(blob);
     r = tcl_numeric_result(tcl, (count > 0) ? FNORMAL : FERROR, count);
   } else if (SUBCMD(subcmd, "split")) {
-    if (nargs < 4) {  /* need at least "array slice var string" */
+    if (nargs < 4) {  /* need at least "array split var string" */
       tcl_free(subcmd);
       tcl_free(name);
       return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
@@ -2134,6 +2167,38 @@ static bool binary_fmt(const char **source, unsigned *width, unsigned *count, bo
   return true;
 }
 
+static void binary_swapbytes(unsigned char *data, size_t width) {
+  unsigned low = 0;
+  unsigned high = width - 1;
+  while (low < high) {
+    unsigned char t = data[low];
+    data[low] = data[high];
+    data[high] = t;
+    low++;
+    high--;
+  }
+}
+
+static bool binary_checkformat(struct tcl_value *fmt, int numvars, size_t *datasize) {
+  size_t dsize = 0;
+  const char *ftmp = tcl_data(fmt);
+  for (int i = 0; i < numvars; i++) {
+    unsigned width, count;
+    bool sign_extend, is_bigendian;
+    if (!binary_fmt(&ftmp, &width, &count, &sign_extend, &is_bigendian)) {
+      return false;
+    }
+    if (count > (unsigned)numvars) {
+      count = numvars;
+    }
+    dsize += width * count;
+  }
+  if (datasize) {
+    *datasize = dsize;
+  }
+  return true;
+}
+
 static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
   int r = FERROR;
@@ -2150,31 +2215,22 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
   }
 
   struct tcl_value *fmt = tcl_list_item(args, fmtidx);
-  const char *fmtraw = tcl_data(fmt);
   int numvars = nargs - (fmtidx + 1); /* first argument is behind the format string */
   if (SUBCMD(subcmd, "format")) {
     /* syntax "binary format fmt arg ..." */
     /* get data size */
     size_t datalen = 0;
-    const char *ftmp = fmtraw;
-    for (int i = 0; i < numvars; i++) {
-      unsigned width, count;
-      bool sign_extend, is_bigendian;
-      if (!binary_fmt(&ftmp, &width, &count, &sign_extend, &is_bigendian)) {
-        tcl_free(subcmd);
-        tcl_free(fmt);
-        return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
-      }
-      if (count > (unsigned)numvars) {
-        count = numvars;
-      }
-      datalen+=width*count;
+    if (!binary_checkformat(fmt, numvars, &datalen)) {
+      tcl_free(subcmd);
+      tcl_free(fmt);
+      return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
     }
-    char *rawdata = _malloc(datalen);
+    unsigned char *rawdata = _malloc(datalen);
     if (rawdata != NULL) {
       int dataidx = 0;
       unsigned width, count = 0;
       bool sign_extend, is_bigendian;
+      const char *fmtraw = tcl_data(fmt);
       for (int varidx = 0; varidx < numvars; varidx++) {
         if (count == 0) {
           binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian);
@@ -2184,29 +2240,26 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
         tcl_free(argvalue);
         memcpy(rawdata + dataidx, &val, width);
         if (is_bigendian) {
-          unsigned low = 0;
-          unsigned high = width - 1;
-          while (low < high) {
-            unsigned char t = rawdata[dataidx + low];
-            rawdata[dataidx + low] = rawdata[dataidx + high];
-            rawdata[dataidx + high] = t;
-            low++;
-            high--;
-          }
+          binary_swapbytes(rawdata + dataidx, width);
         }
         dataidx += width;
         count--;
       }
-      r = tcl_result(tcl, FNORMAL, tcl_value(rawdata, datalen));
+      r = tcl_result(tcl, FNORMAL, tcl_value((char*)rawdata, datalen));
       _free(rawdata);
     } else {
       r = tcl_error_result(tcl, TCLERR_MEMORY, NULL);
     }
   } else if (SUBCMD(subcmd, "scan")) {
     /* syntax "binary scan data fmt var ..." */
+    if (!binary_checkformat(fmt, numvars, NULL)) {
+      tcl_free(subcmd);
+      tcl_free(fmt);
+      return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
+    }
     struct tcl_value *data = tcl_list_item(args, 2);
     size_t datalen = tcl_length(data);
-    char *rawdata = _malloc(datalen);  /* make a copy of the data */
+    unsigned char *rawdata = _malloc(datalen);  /* make a copy of the data */
     if (rawdata == NULL) {
       tcl_free(subcmd);
       tcl_free(fmt);
@@ -2217,21 +2270,17 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
     tcl_free(data);
     int dataidx = 0;
     int cvtcount = 0;
+    const char *fmtraw = tcl_data(fmt);
     for (int varidx = 0; varidx < numvars; varidx++) {
       /* get variable name */
       char varname[128];
       struct tcl_value *var = tcl_list_item(args, varidx + fmtidx + 1);
       strlcpy(varname, tcl_data(var), sizeof varname);
       tcl_free(var);
-      /* get field format */
+      /* get field format (validity was already checked) */
       unsigned width, count;
       bool sign_extend, is_bigendian;
-      if (!binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian)) {
-        tcl_free(subcmd);
-        tcl_free(fmt);
-        _free(rawdata);
-        return tcl_error_result(tcl, TCLERR_ARGUMENT, NULL);
-      }
+      binary_fmt(&fmtraw, &width, &count, &sign_extend, &is_bigendian);
       /* get & format the data */
       struct tcl_value *value = NULL;
       assert(count > 0);
@@ -2239,15 +2288,7 @@ static int tcl_cmd_binary(struct tcl *tcl, const struct tcl_value *args, const s
       for (unsigned c = 0; c < count && dataidx + width <= datalen; c++) {
         if (is_bigendian) {
           /* convert Big Endian to Little Endian before moving to numeric value */
-          unsigned low = 0;
-          unsigned high = width - 1;
-          while (low < high) {
-            unsigned char t = rawdata[dataidx + low];
-            rawdata[dataidx + low] = rawdata[dataidx + high];
-            rawdata[dataidx + high] = t;
-            low++;
-            high--;
-          }
+          binary_swapbytes(rawdata + dataidx, width);
         }
         tcl_int val = 0;
         /* for sign extension, look at the sign bit of the last byte (now that the
@@ -2650,6 +2691,70 @@ static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const str
     tcl_free(fd);
   }
   return (r == FNORMAL) ? tcl_empty_result(tcl) : r;
+}
+#endif
+
+#if !defined TCL_DISABLE_EXEC
+static int tcl_cmd_exec(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
+  (void)user;
+  /* calculate size for complete command & argument list */
+  size_t needed = 0;
+  int nargs = tcl_list_length(args);
+  for (int i = 1; i < nargs; i++) {
+    struct tcl_value *v = tcl_list_item(args, i);
+    needed += tcl_length(v) + 1;
+    tcl_free(v);
+  }
+  /* build command line */
+  char *cmd = _malloc(needed);
+  if (!cmd) {
+    return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+  }
+  size_t pos = 0;
+  for (int i = 1; i < nargs; i++) {
+    struct tcl_value *v = tcl_list_item(args, i);
+    size_t len = tcl_length(v);
+    memcpy(cmd + pos, tcl_data(v), len);
+    cmd[pos + len] = (i + 1 == nargs) ? '\0' : ' ';
+    tcl_free(v);
+    pos += len + 1;
+  }
+  /* prepare the buffer for captured output */
+  size_t bufsize = 256;
+  size_t buflen = 0;
+  char *buf = _malloc(bufsize);
+  if (!buf) {
+    return tcl_error_result(tcl, TCLERR_MEMORY, NULL);
+  }
+  /* execute command */
+  int r = FNORMAL;
+  FILE* fp = _popen(cmd, "r" );
+  if (fp) {
+    /* collect the output */
+    while (!feof(fp)) {
+      size_t n = fread(buf + buflen, 1, bufsize - buflen, fp);
+      assert(n <= bufsize - buflen);
+      buflen += n;
+      if (buflen >= bufsize) {
+        size_t newsize = 2 * bufsize;
+        char *newbuf = _malloc(newsize);
+        if (!newbuf) {
+          break;
+        }
+        memcpy(newbuf, buf, buflen);
+        _free(buf);
+        buf = newbuf;
+        bufsize = newsize;
+      }
+    }
+    _pclose(fp);
+    r = tcl_result(tcl, FNORMAL, tcl_value(buf, buflen));
+  } else {
+    r = tcl_error_result(tcl, TCLERR_FILEIO, cmd);
+  }
+  _free(buf);
+  _free(cmd);
+  return r;
 }
 #endif
 
@@ -3583,7 +3688,7 @@ void tcl_init(struct tcl *tcl, const void *user) {
     tcl_register(tcl, "close", tcl_cmd_close, 0, 1, 1, NULL);
     tcl_register(tcl, "eof", tcl_cmd_eof, 0, 1, 1, NULL);
     tcl_register(tcl, "file", tcl_cmd_file, 1, 1, 1, NULL);
-    tcl_register(tcl, "file", tcl_cmd_flush, 0, 1, 1, NULL);
+    tcl_register(tcl, "flush", tcl_cmd_flush, 0, 1, 1, NULL);
     tcl_register(tcl, "gets", tcl_cmd_gets, 0, 1, 2, NULL);
     tcl_register(tcl, "open", tcl_cmd_open, 0, 1, 2, NULL);
     tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
@@ -3592,6 +3697,9 @@ void tcl_init(struct tcl *tcl, const void *user) {
     tcl_register(tcl, "tell", tcl_cmd_tell, 0, 1, 1, NULL);
 # elif !defined TCL_DISABLE_PUTS
     tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
+# endif
+# if !defined TCL_DISABLE_EXEC
+    tcl_register(tcl, "exec", tcl_cmd_exec, 0, 1, -1, NULL);
 # endif
 # if !defined TCL_DISABLE_SOURCE
     tcl_register(tcl, "source", tcl_cmd_source, 0, 1, 1, NULL);
