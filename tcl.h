@@ -300,6 +300,41 @@ int tcl_result(struct tcl *tcl, int flow, struct tcl_value *result);
     Internals
    ========================================================================= */
 
+/** Error codes that the commands may set */
+enum {
+  TCL_ERROR_NONE,       /**< no known error, or no error was flagged */
+  TCL_ERROR_GENERAL,    /**< unspecified error */
+  TCL_ERROR_MEMORY,     /**< memory allocation error */
+  TCL_ERROR_SYNTAX,     /**< general syntax error */
+  TCL_ERROR_BRACES,     /**< unbalanced curly braces */
+  TCL_ERROR_EXPR,       /**< error in expression */
+  TCL_ERROR_CMDUNKNOWN, /**< unknown command */
+  TCL_ERROR_CMDARGCOUNT,/**< wrong argument count on command */
+  TCL_ERROR_SUBCMD,     /**< unsupported subcommand */
+  TCL_ERROR_VARUNKNOWN, /**< unknown variable name */
+  TCL_ERROR_NAMEINVALID,/**< invalid symbol name */
+  TCL_ERROR_NAMEEXISTS, /**< symbol name already exists */
+  TCL_ERROR_ARGUMENT,   /**< incorrect (or missing) argument to a command */
+  TCL_ERROR_DEFAULTVAL, /**< incorrect default value on parameter */
+  TCL_ERROR_SCOPE,      /**< scope error (e.g. command is allowed in local scope only) */
+  TCL_ERROR_FILEIO,     /**< operation on file failed (e.g. file not found) */
+  TCL_ERROR_USER,       /**< error set with the "error" command */
+};
+
+/** tcl_raise_error() stores error information in the interpreter, so that
+ *  tcl_eval() returns 1 (for failure), and the corresponding error can be
+ *  queried with tcl_errorinfo().
+ *
+ *  \param tcl      The interpreter context.
+ *  \param code     The error code, one of the TCL_ERROR_* constants.
+ *  \param info     Additional information on the error; for example on code
+ *                  `TCL_ERROR_SUBCMD` the name of the subcommand.
+ *
+ *  \note The interpreter stores only the first error. This function does
+ *        nothing if an error was already raised in the context.
+ */
+void tcl_raise_error(struct tcl *tcl, int code, const char *info);
+
 /** tcl_cur_scope() returns the current scope level. It is zero at the global
  *  level, and is incremented each time that a new local environment for a user
  *  procedure is allocated.
