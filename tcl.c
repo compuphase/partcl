@@ -81,6 +81,8 @@ enum { FNORMAL, FERROR, FRETURN, FBREAK, FCONT, FEXIT };
 #define LEX_QUOTE   0x01  /* inside a double-quote section */
 #define LEX_VAR     0x02  /* special mode for parsing variable names */
 #define LEX_NO_CMT  0x04  /* don't allow comment here (so comment is allowed when this is not set) */
+#define LEX_SKIPERR 0x08  /* continue parsing despit errors */
+#define LEX_SUBST   0x10  /* "subst" command mode -> quotes are not special */
 
 /* special character classification */
 #define CTYPE_OPERATOR  0x01
@@ -190,12 +192,14 @@ static int tcl_next(const char *string, size_t length, const char **from, const 
     return (r == TFIELD && quote) ? TPART : r;
   }
 
-  if (*string == '[' || (!quote && *string == '{')) {
+  if ((*flags & (LEX_SUBST | LEX_VAR)) == LEX_SUBST && (*string == '{' || *string == '}' || *string == '"')) {
+    i = 1;
+  } else if (*string == '[' || (*string == '{' && !quote)) {
     /* Interleaving pairs are not welcome, but it simplifies the code */
     char open = *string;
     char close = (open == '[' ? ']' : '}');
     for (i = 1, depth = 1; i < length && depth != 0; i++) {
-      if (string[i] == '\\' && i+1 < length && (string[i+1] == open || string[i+1] == close)) {
+      if (string[i] == '\\' && i+1 < length && (string[i+1] == open || string[i+1] == close || string[i+1] == '\\')) {
         i++;  /* escaped brace/bracket, skip both '\' and the character that follows it */
       } else if (string[i] == open) {
         depth++;
@@ -267,20 +271,21 @@ struct tcl_parser {
   unsigned flags;
   int token;
 };
-static struct tcl_parser init_tcl_parser(const char *start, const char *end, int token) {
+static struct tcl_parser init_tcl_parser(const char *start, const char *end, int token, unsigned flags) {
   struct tcl_parser p;
   memset(&p, 0, sizeof(p));
   p.start = start;
   p.end = end;
   p.token = token;
+  p.flags = flags;
   return p;
 }
-#define tcl_each(s, len, skiperr)                                              \
-  for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR);        \
-       p.start < p.end &&                                                      \
-       (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,         \
-                             &p.flags)) != TERROR) ||                          \
-        (skiperr));                                                            \
+#define tcl_each(s, len, flag)                                                  \
+  for (struct tcl_parser p = init_tcl_parser((s), (s) + (len), TERROR, (flag)); \
+       p.start < p.end &&                                                       \
+       (((p.token = tcl_next(p.start, p.end - p.start, &p.from, &p.to,          \
+                             &p.flags)) != TERROR) ||                           \
+        (p.flags & LEX_SKIPERR) != 0);                                          \
        p.start = p.to)
 
 /* -------------------------------------------------------------------------- */
@@ -438,16 +443,42 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail) {
   assert(tail);
   bool separator = (tcl_length(list) > 0);
   size_t extrasz = separator ? 1 : 0;
-  bool quote = false;
+  /* when "tail" contains white space or special characters, it must be quoted
+     (so that it is appended to the list as a single item); when "tail" contains
+     unbalanced braces, these must be escaped (and as it is convoluted to detect
+     exactly which of a sequence of braces is unbalanced, we escape all braces
+     in case "unbalance" is detected). */
+  bool quote = false;     /* to check whether brace-quoting is needed */
+  bool escape = false;    /* to check whether escaping (of braces) is needed */
   if (tcl_length(tail) > 0) {
+    int brace_count = 0;  /* to keep to count of braces that may need escaping */
+    int nesting = 0;      /* to detect unbalance */
     const char *p = tcl_data(tail);
-    for (size_t i = 0; i < tcl_length(tail) && !quote; i++) {
-      if (tcl_is_space(p[i]) || tcl_is_special(p[i], false)) {
+    size_t len = tcl_length(tail);
+    while (len > 0) {
+      if (tcl_is_space(*p) || tcl_is_special(*p, false)) {
         quote = true;
       }
+      if (*p == '{') {
+        nesting++;
+        brace_count += 1;
+      } else if (*p == '}') {
+        if (nesting == 0) {
+          escape = true;  /* closing brace without opening brace */
+        } else {
+          nesting--;
+        }
+        brace_count += 1;
+      }
+      len--;
+      p++;
+    }
+    if (nesting > 0) {
+      escape = true;    /* opening brace without closing brace */
+      extrasz += brace_count;
     }
   } else {
-    quote = true; /* quote, to create an empty element */
+    quote = true;       /* quote, to create an empty element */
   }
   if (quote) {
     extrasz += 2;
@@ -471,20 +502,29 @@ bool tcl_list_append(struct tcl_value *list, struct tcl_value *tail) {
   }
   char *tgt = (char*)tcl_data(list) + tcl_length(list);
   if (separator) {
-    memcpy(tgt, " ", 1);
-    tgt += 1;
+    *tgt++ = ' ';
   }
   if (quote) {
-    memcpy(tgt, "{", 1);
-    tgt += 1;
+    *tgt++ = '{';
   }
   if (tcl_length(tail) > 0) {
-    memcpy(tgt, tcl_data(tail), tcl_length(tail));
-    tgt += tcl_length(tail);
+    if (escape) {
+      const char *p = tcl_data(tail);
+      size_t len = tcl_length(tail);
+      while (len > 0) {
+        if (*p == '{' || *p == '}') {
+          *tgt++ = '\\';
+        }
+        *tgt++ = *p++;
+        len--;
+      }
+    } else {
+      memcpy(tgt, tcl_data(tail), tcl_length(tail));
+      tgt += tcl_length(tail);
+    }
   }
   if (quote) {
-    memcpy(tgt, "}", 1);
-    tgt += 1;
+    *tgt++ = '}';
   }
   *tgt = '\0';
   list->length = tcl_length(list) + tcl_length(tail) + extrasz;
@@ -1019,7 +1059,7 @@ int tcl_eval(struct tcl *tcl, const char *string, size_t length) {
   struct tcl_value *cur = NULL;
   int result = tcl_empty_result(tcl);  /* preset to empty result */
   bool markposition = true;
-  tcl_each(string, length, 1) {
+  tcl_each(string, length, LEX_SKIPERR) {
     if (markposition) {
       struct tcl_errinfo *info = &tcl->env->errinfo;
       if (p.from >= info->codebase && p.from < info->codebase + info->codesize) {
@@ -1232,9 +1272,62 @@ static int tcl_cmd_upvar(struct tcl *tcl, const struct tcl_value *args, const st
 
 static int tcl_cmd_subst(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
-  struct tcl_value *s = tcl_list_item(args, 1);
-  int r = tcl_subst(tcl, tcl_data(s), tcl_length(s));
-  tcl_free(s);
+  struct tcl_value *arg = tcl_list_item(args, 1);
+  const char *string = tcl_data(arg);
+  size_t length = tcl_length(arg);
+  struct tcl_value *list = tcl_list_new();
+  struct tcl_value *cur = NULL;
+  int r = tcl_empty_result(tcl);  /* preset to empty result */
+  tcl_each(string, length, LEX_SKIPERR | LEX_SUBST) {
+    switch (p.token) {
+    case TERROR:
+      r = tcl_error_result(tcl, TCL_ERROR_SYNTAX, NULL);
+      break;
+    case TFIELD:
+      r = tcl_subst(tcl, p.from, p.to - p.from);
+      if (cur) {
+        tcl_append(cur, tcl_dup(tcl->result));
+      } else {
+        cur = tcl_dup(tcl->result);
+      }
+      if (tcl_length(list) > 0) {
+        tcl_append(list, tcl_value(" ", 1));
+      }
+      tcl_append(list, cur);
+      cur = NULL;
+      break;
+    case TPART: {
+      struct tcl_value *part;
+      if (p.to - p.from == 1 && (*p.from == '{' || *p.from == '}' || *p.from == '"')) {
+        part = tcl_value(p.from, 1);
+      } else {
+        r = tcl_subst(tcl, p.from, p.to - p.from);
+        part = tcl_dup(tcl->result);
+      }
+      if (cur) {
+        tcl_append(cur, part);
+      } else {
+        cur = part;
+      }
+      break;
+    }
+    case TEXECPOINT:
+      tcl_append(list, tcl_value("\n", 1)); /* mark execution point */
+      break;
+    case TDONE:
+      break;
+    }
+    if (r != FNORMAL) {
+      break;  /* error information already set */
+    }
+  }
+  tcl_free(arg);
+  if (cur) {
+    tcl_free(cur);
+  }
+  if (r == FNORMAL) {
+    tcl_result(tcl, r, list);
+  }
   return r;
 }
 
