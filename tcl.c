@@ -2476,7 +2476,17 @@ static int tcl_cmd_source(struct tcl *tcl, const struct tcl_value *args, const s
 }
 #endif
 
-#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
+#if !defined TCL_DISABLE_FILEIO
+# if defined _WIN32 || defined _WIN64
+#   include <io.h>
+# else
+#   define _S_IFDIR       S_IFDIR
+#   define _S_IFREG       S_IFREG
+#   include <unistd.h>
+#   include <fcntl.h>
+# endif
+# include <sys/stat.h>
+
 static FILE *tcl_stdhandle(const struct tcl_value *arg) {
   assert(arg);
   FILE *result = NULL;
@@ -2489,18 +2499,6 @@ static FILE *tcl_stdhandle(const struct tcl_value *arg) {
   }
   return result;
 }
-#endif
-
-#if !defined TCL_DISABLE_FILEIO
-# if defined _WIN32 || defined _WIN64
-#   include <io.h>
-# else
-#   define _S_IFDIR       S_IFDIR
-#   define _S_IFREG       S_IFREG
-#   include <unistd.h>
-#   include <fcntl.h>
-# endif
-# include <sys/stat.h>
 
 static int tcl_cmd_open(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   (void)user;
@@ -2728,35 +2726,33 @@ static int tcl_cmd_file(struct tcl *tcl, const struct tcl_value *args, const str
 }
 #endif /* TCL_DISABLE_FILEIO */
 
-#if !defined TCL_DISABLE_PUTS && !defined TCL_DISABLE_FILEIO
+#if !defined TCL_DISABLE_PUTS
 static int tcl_cmd_puts(struct tcl *tcl, const struct tcl_value *args, const struct tcl_value *user) {
   bool no_eol = (tcl_list_find(user, "-nonewline") >= 0);
-  struct tcl_value *fd = NULL;
-  struct tcl_value *text = NULL;
+  int argcount = tcl_list_length(args);
+  struct tcl_value *text = tcl_list_item(args, argcount - 1);
   int r = FNORMAL;
-  if (tcl_list_length(args) == 3) {
-    fd = tcl_list_item(args, 1);
-    text = tcl_list_item(args, 2);
-    FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
-    if (fileno(fp) < 0) {
-      r = tcl_error_result(tcl, TCL_ERROR_FILEIO, NULL);
-    } else {
-      fprintf(fp, "%s", tcl_data(text));
-      if (!no_eol) {
-        fprintf(fp, "\n");
+  if (argcount == 3) {
+#   if !defined TCL_DISABLE_FILEIO
+      struct tcl_value *fd = tcl_list_item(args, 1);
+      FILE *fp = tcl_stdhandle(fd) ? tcl_stdhandle(fd) : (FILE*)tcl_number(fd);
+      if (fileno(fp) < 0) {
+        r = tcl_error_result(tcl, TCL_ERROR_FILEIO, NULL);
+      } else {
+        fprintf(fp, "%s", tcl_data(text));
+        if (!no_eol) {
+          fprintf(fp, "\n");
+        }
       }
-    }
+      tcl_free(fd);
+#   endif
   } else {
-    text = tcl_list_item(args, 1);
     printf("%s", tcl_data(text));
     if (!no_eol) {
       printf("\n");
     }
   }
   tcl_free(text);
-  if (fd) {
-    tcl_free(fd);
-  }
   return (r == FNORMAL) ? tcl_empty_result(tcl) : r;
 }
 #endif
@@ -3894,11 +3890,11 @@ void tcl_init(struct tcl *tcl, const void *user) {
     tcl_register(tcl, "flush", tcl_cmd_flush, 0, 1, 1, NULL);
     tcl_register(tcl, "gets", tcl_cmd_gets, 0, 1, 2, NULL);
     tcl_register(tcl, "open", tcl_cmd_open, 0, 1, 2, NULL);
-    tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
     tcl_register(tcl, "read", tcl_cmd_read, 0, 1, 2, tcl_value("-nonewline", -1));
     tcl_register(tcl, "seek", tcl_cmd_seek, 0, 2, 3, NULL);
     tcl_register(tcl, "tell", tcl_cmd_tell, 0, 1, 1, NULL);
-# elif !defined TCL_DISABLE_PUTS
+# endif
+# if !defined TCL_DISABLE_PUTS
     tcl_register(tcl, "puts", tcl_cmd_puts, 0, 1, 2, tcl_value("-nonewline", -1));
 # endif
 # if !defined TCL_DISABLE_EXEC
